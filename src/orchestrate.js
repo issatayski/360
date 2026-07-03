@@ -83,17 +83,30 @@ function main() {
     console.log('\n=== 1/3 triage — пропущено (--skip-triage) ===');
   }
 
-  // 2. generator
-  let code = run('2/3 generator', 'node', [
+  // 2. tiler (Phase 2, опционально: --tile). Иначе single-equirect (Phase 1).
+  let tilesArgs = [];
+  if (args.tile) {
+    const face = String(args.face || 2048);
+    const code = run('tiler', 'node', [
+      'src/tiler/tile.js', '--in', indir, '--out', 'work/tiles', '--face', face,
+    ]);
+    if (code !== 0) { console.error(`tiler упал (код ${code})`); process.exit(code || 1); }
+    tilesArgs = ['--tiles', 'work/tiles'];
+  }
+
+  // 3. generator
+  let code = run('generator', 'node', [
     'src/generator/build-data.js', '--manifest', manifest, '--images', indir, '--out', dataOut,
+    ...tilesArgs,
   ]);
   if (code !== 0) { console.error(`generator упал (код ${code})`); process.exit(code || 1); }
 
-  // 3. assemble
-  code = run('3/3 assemble', 'node', [
+  // 4. assemble
+  code = run('assemble', 'node', [
     'src/assemble/assemble.js',
     '--template', 'templates/marzipano-base',
     '--data', dataOut, '--images', indir, '--out', out,
+    ...tilesArgs,
   ]);
   if (code !== 0) { console.error(`assemble упал (код ${code})`); process.exit(code || 1); }
 

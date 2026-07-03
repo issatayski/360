@@ -15,9 +15,21 @@
   var MAX_FOV = 100 * Math.PI / 180;
 
   var scenes = data.scenes.map(function (sd) {
-    var source = Marzipano.ImageUrlSource.fromString(sd.equirectUrl);
-    var geometry = new Marzipano.EquirectGeometry([{ width: sd.equirectWidth || 4000 }]);
-    var limiter = Marzipano.RectilinearView.limit.traditional(sd.equirectWidth || 4000, MAX_FOV);
+    var source, geometry, limitRes;
+    if (sd.type === 'cube' || sd.levels) {
+      // Phase 2: multires cube-тайлы + preview (мгновенная сцена, §8.2).
+      source = Marzipano.ImageUrlSource.fromString(
+        'tiles/' + sd.id + '/{z}/{f}/{y}/{x}.jpg',
+        { cubeMapPreviewUrl: 'tiles/' + sd.id + '/preview.jpg' }
+      );
+      geometry = new Marzipano.CubeGeometry(sd.levels);
+      limitRes = sd.faceSize || 2048;
+    } else {
+      source = Marzipano.ImageUrlSource.fromString(sd.equirectUrl);
+      geometry = new Marzipano.EquirectGeometry([{ width: sd.equirectWidth || 4000 }]);
+      limitRes = sd.equirectWidth || 4000;
+    }
+    var limiter = Marzipano.RectilinearView.limit.traditional(limitRes, MAX_FOV);
     var view = new Marzipano.RectilinearView(sd.initialViewParameters, limiter);
     var scene = viewer.createScene({ source: source, geometry: geometry, view: view });
     return { data: sd, scene: scene, view: view };

@@ -59,6 +59,7 @@ async function main() {
   const args = parseArgs(process.argv);
   const manifestPath = args.manifest || 'input/manifest.json';
   const imagesDir = args.images || path.dirname(manifestPath);
+  const tilesDir = args.tiles || null; // Phase 2: если задан и есть tiles.json — cube-режим
   const outPath = args.out || 'work/data.js';
 
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
@@ -76,26 +77,42 @@ async function main() {
       continue;
     }
     const file = s.file || `${s.id}.jpg`;
-    const imgPath = path.join(imagesDir, file);
-    let width = 4000;
-    try {
-      const meta = await sharp(imgPath).metadata();
-      if (meta.width) width = meta.width;
-      if (meta.width && meta.height && Math.abs(meta.width / meta.height - 2) > 0.02) {
-        console.warn(`warn: ${file} не 2:1 (${meta.width}x${meta.height}) — equirect ждёт 2:1`);
-      }
-    } catch (e) {
-      console.warn(`warn: не прочитать ${imgPath} (${e.message}) — width=${width}`);
-    }
-    accepted.push({ src: s, out: {
+
+    // Phase 2: cube-режим, если тайлер оставил tiles.json для сцены.
+    const tilesMeta = tilesDir && path.join(tilesDir, s.id, 'tiles.json');
+    const tiled = tilesMeta && fs.existsSync(tilesMeta)
+      ? JSON.parse(fs.readFileSync(tilesMeta, 'utf8')) : null;
+
+    const out = {
       id: s.id,
       name: s.name || s.id,
-      equirectUrl: `img/${file}`,
-      equirectWidth: width,
       initialViewParameters: { yaw: 0, pitch: 0, fov: DEFAULT_FOV },
       linkHotspots: [],
       infoHotspots: []
-    } });
+    };
+
+    if (tiled) {
+      out.type = 'cube';
+      out.faceSize = tiled.faceSize;
+      out.levels = tiled.levels;
+    } else {
+      out.type = 'equirect';
+      const imgPath = path.join(imagesDir, file);
+      let width = 4000;
+      try {
+        const meta = await sharp(imgPath).metadata();
+        if (meta.width) width = meta.width;
+        if (meta.width && meta.height && Math.abs(meta.width / meta.height - 2) > 0.02) {
+          console.warn(`warn: ${file} не 2:1 (${meta.width}x${meta.height}) — equirect ждёт 2:1`);
+        }
+      } catch (e) {
+        console.warn(`warn: не прочитать ${imgPath} (${e.message}) — width=${width}`);
+      }
+      out.equirectUrl = `img/${file}`;
+      out.equirectWidth = width;
+    }
+
+    accepted.push({ src: s, out });
   }
 
   const byId = new Map(accepted.map((a) => [a.src.id, a]));
