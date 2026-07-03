@@ -1,0 +1,84 @@
+{
+  "tour": {
+    "id": "villa-01",
+    "name": "Вилла на Абая"
+  },
+  "floorplan": {
+    "image": "plan.png"
+  },
+  "scenes": [
+    {
+      "id": "01-hall",
+      "file": "01-hall.jpg",
+      "order": 1,
+      "heading": 0,
+      "floorplan": {
+        "x": 0.2,
+        "y": 0.5
+      },
+      "quality": {
+        "status": "ok",
+        "reasons": []
+      },
+      "links": [
+        "02-kitchen"
+      ]
+    },
+    {
+      "id": "02-kitchen",
+      "file": "02-kitchen.jpg",
+      "order": 2,
+      "heading": 90,
+      "floorplan": {
+        "x": 0.45,
+        "y": 0.5
+      },
+      "quality": {
+        "status": "ok",
+        "reasons": []
+      },
+      "links": [
+        "01-hall",
+        "03-living"
+      ]
+    },
+    {
+      "id": "03-living",
+      "file": "03-living.jpg",
+      "order": 3,
+      "heading": 180,
+      "floorplan": {
+        "x": 0.7,
+        "y": 0.5
+      },
+      "quality": {
+        "status": "ok",
+        "reasons": []
+      },
+      "links": [
+        "02-kitchen",
+        "04-bedroom"
+      ]
+    },
+    {
+      "id": "04-bedroom",
+      "file": "04-bedroom.jpg",
+      "order": 4,
+      "heading": 270,
+      "floorplan": {
+        "x": 0.85,
+        "y": 0.3
+      },
+      "quality": {
+        "status": "ok",
+        "reasons": []
+      },
+      "links": [
+        "03-living"
+      ]
+    }
+  ],
+  "settings": {
+    "autorotate": false
+  }
+}

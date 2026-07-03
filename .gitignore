@@ -1,0 +1,6 @@
+node_modules/
+.venv/
+.claude/
+work/
+output/
+input/*.jpg
