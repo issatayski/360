@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tour Pipeline — демо</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #0e1016; color: #f0f0f2;
+    padding: 24px; }
+  @media (prefers-color-scheme: light) { body { background: #f4f5f7; color: #16181d; } }
+  .wrap { max-width: 480px; width: 100%; text-align: center; }
+  h1 { font-size: 26px; margin-bottom: 6px; }
+  .sub { opacity: .6; margin-bottom: 28px; font-size: 15px; }
+  a.card { display: block; text-decoration: none; color: inherit; text-align: left;
+    padding: 20px 22px; margin-bottom: 14px; border-radius: 16px; background: rgba(127,127,127,.12);
+    border: 1px solid rgba(127,127,127,.16); transition: transform .12s, background .12s; }
+  a.card:hover { transform: translateY(-2px); background: rgba(127,127,127,.2); }
+  .card .t { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+  .card .d { font-size: 14px; opacity: .65; line-height: 1.45; }
+  .emoji { font-size: 24px; margin-right: 8px; }
+  .note { margin-top: 18px; font-size: 13px; opacity: .5; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Tour Pipeline</h1>
+    <div class="sub">Съёмка 360° и самохостящийся тур на Marzipano</div>
+
+    <a class="card" href="capture/">
+      <div class="t"><span class="emoji">📸</span>Съёмка 360°</div>
+      <div class="d">Открой на телефоне. Камера + гироскоп ведут по маркерам; на выходе —
+        zip кадров с углами для сборки. Нужен HTTPS (Netlify/Pages это дают).</div>
+    </a>
+
+    <a class="card" href="tour/">
+      <div class="t"><span class="emoji">🏛️</span>Демо-тур</div>
+      <div class="d">Готовый тур на реальных панорамах: multires-тайлы, стрелки-переходы,
+        префетч. Тащи мышью / пальцем.</div>
+    </a>
+
+    <div class="note">Собрано автоматически: capture → stitch → triage → tiler →
+      generator → assemble → package.</div>
+  </div>
+</body>
+</html>

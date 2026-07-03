@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Съёмка 360° — Tour Capture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; overflow: hidden; background: #000; color: #fff;
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif; touch-action: none; }
+  #video, #sim { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  #sim { display: none; }
+  #overlay { position: absolute; inset: 0; }
+
+  /* центральное перекрестие */
+  .reticle { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px;
+    transform: translate(-50%, -50%); border: 2px solid rgba(255,255,255,.8);
+    border-radius: 50%; }
+  .reticle::before, .reticle::after { content: ''; position: absolute; background: rgba(255,255,255,.8); }
+  .reticle::before { left: 50%; top: 20%; width: 2px; height: 60%; transform: translateX(-50%); }
+  .reticle::after { top: 50%; left: 20%; height: 2px; width: 60%; transform: translateY(-50%); }
+
+  /* маркер цели */
+  #marker { position: absolute; width: 84px; height: 84px; transform: translate(-50%, -50%);
+    border: 3px solid #4cd964; border-radius: 50%; box-shadow: 0 0 16px rgba(76,217,100,.6);
+    display: none; transition: opacity .1s; }
+  #marker.near { border-color: #ffd60a; box-shadow: 0 0 22px rgba(255,214,10,.8); }
+
+  #hud { position: absolute; top: 0; left: 0; right: 0; padding: 14px 16px;
+    background: linear-gradient(rgba(0,0,0,.5), transparent); display: flex; gap: 12px; align-items: center; }
+  #bar { flex: 1; height: 8px; border-radius: 4px; background: rgba(255,255,255,.25); overflow: hidden; }
+  #barFill { height: 100%; width: 0; background: #4cd964; transition: width .2s; }
+  #count { font-variant-numeric: tabular-nums; font-size: 15px; min-width: 54px; text-align: right; }
+
+  #hint { position: absolute; left: 50%; bottom: 128px; transform: translateX(-50%);
+    background: rgba(0,0,0,.55); padding: 8px 16px; border-radius: 999px; font-size: 14px; white-space: nowrap; }
+
+  #controls { position: absolute; left: 0; right: 0; bottom: 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+    background: linear-gradient(transparent, rgba(0,0,0,.55)); display: flex; gap: 10px; justify-content: center; }
+  button { border: none; border-radius: 12px; padding: 13px 18px; font-size: 15px; font-weight: 600;
+    background: rgba(255,255,255,.16); color: #fff; cursor: pointer; backdrop-filter: blur(6px); }
+  button.primary { background: #0a84ff; }
+  button.good { background: #34c759; }
+  button:disabled { opacity: .4; }
+
+  #start { position: absolute; inset: 0; background: #0b0d12; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; padding: 28px; gap: 14px; z-index: 5; }
+  #start h1 { font-size: 22px; } #start p { opacity: .7; max-width: 420px; line-height: 1.5; font-size: 15px; }
+  #start .mode { font-size: 13px; opacity: .5; margin-top: 6px; }
+  .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+  .flash.on { animation: fl .25s; } @keyframes fl { from { opacity: .8; } to { opacity: 0; } }
+</style>
+</head>
+<body>
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="sim"></canvas>
+  <canvas id="grab" style="display:none"></canvas>
+  <div class="flash" id="flash"></div>
+
+  <div id="overlay" style="display:none">
+    <div class="reticle"></div>
+    <div id="marker"></div>
+    <div id="hud">
+      <div id="bar"><div id="barFill"></div></div>
+      <div id="count">0 / 0</div>
+    </div>
+    <div id="hint">Наведи перекрестие в зелёный круг</div>
+    <div id="controls">
+      <button id="calib">Задать «вперёд»</button>
+      <button id="shoot" class="primary">Снять кадр</button>
+      <button id="finish" class="good" disabled>Готово · скачать</button>
+    </div>
+  </div>
+
+  <div id="start">
+    <h1>Съёмка 360°</h1>
+    <p>Встань в центр комнаты. Держи телефон вертикально и <b>вращайся вокруг себя</b>,
+       наводя перекрестие в зелёные круги — кадр снимется сам. Пройди все кольца: горизонт, вверх, вниз, потолок, пол.</p>
+    <button id="begin" class="primary">Начать съёмку</button>
+    <div class="mode" id="modeLine"></div>
+  </div>
+
+<script>
+"use strict";
+(function () {
+  // ---------- схема покрытия сферы (кольца + шапки) ----------
+  const HFOV = 65;              // предполагаемый гориз. угол камеры телефона, град
+  const TOL = 6;               // допуск попадания в маркер, град
+  const RINGS = [
+    { pitch: 0,   count: 8 },
+    { pitch: 40,  count: 8 },
+    { pitch: -40, count: 8 },
+    { pitch: 72,  count: 4 },
+    { pitch: -72, count: 4 },
+    { pitch: 90,  count: 1 },
+    { pitch: -90, count: 1 },
+  ];
+  const TARGETS = [];
+  for (const r of RINGS)
+    for (let i = 0; i < r.count; i++)
+      TARGETS.push({ yaw: (i * 360 / r.count), pitch: r.pitch, done: false });
+
+  const $ = (id) => document.getElementById(id);
+  const video = $("video"), sim = $("sim"), grab = $("grab");
+  const overlay = $("overlay"), marker = $("marker"), barFill = $("barFill"),
+        count = $("count"), hint = $("hint"), flash = $("flash");
+
+  const view = { yaw: 0, pitch: 0, roll: 0 };
+  let yawOffset = 0;           // калибровка «вперёд»
+  let orientationOK = false;
+  let usingCamera = false;
+  let frames = [];             // { blob, yaw, pitch, roll }
+  const sceneId = "01-scene";
+
+  const norm180 = (d) => { d = ((d + 180) % 360 + 360) % 360 - 180; return d; };
+  const angDist = (t) => Math.hypot(norm180(t.yaw - view.yaw), t.pitch - view.pitch);
+
+  // ---------- ориентация: гироскоп или имитация мышью ----------
+  function onOrient(e) {
+    if (e.alpha == null) return;
+    orientationOK = true;
+    // грубое приведение к yaw/pitch/roll; абсолютная точность не критична —
+    // те же значения записываются в кадр, и stitch использует их же.
+    view.yaw = norm180(-e.alpha - yawOffset);          // компас → yaw
+    view.pitch = Math.max(-90, Math.min(90, e.beta - 90)); // наклон вперёд/назад
+    view.roll = e.gamma || 0;
+  }
+  function enableDragSim() {
+    if (orientationOK) return;
+    hint.textContent = "Мышь/палец: тяни, чтобы осмотреться (имитация гироскопа)";
+    let px = 0, py = 0, drag = false;
+    const dn = (x, y) => { drag = true; px = x; py = y; };
+    const mv = (x, y) => { if (!drag) return; view.yaw = norm180(view.yaw + (x - px) * 0.3);
+      view.pitch = Math.max(-90, Math.min(90, view.pitch - (y - py) * 0.3)); px = x; py = y; };
+    const up = () => { drag = false; };
+    overlay.addEventListener("mousedown", (e) => dn(e.clientX, e.clientY));
+    window.addEventListener("mousemove", (e) => mv(e.clientX, e.clientY));
+    window.addEventListener("mouseup", up);
+    overlay.addEventListener("touchstart", (e) => dn(e.touches[0].clientX, e.touches[0].clientY));
+    overlay.addEventListener("touchmove", (e) => { mv(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); });
+    overlay.addEventListener("touchend", up);
+  }
+
+  // ---------- камера ----------
+  async function initCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 960 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+      usingCamera = true;
+    } catch (err) {
+      // нет камеры/доступа — рисуем градиент-имитацию, чтобы поток был виден
+      usingCamera = false;
+      video.style.display = "none";
+      sim.style.display = "block";
+    }
+  }
+  function drawSim() {
+    const w = sim.width = sim.clientWidth, h = sim.height = sim.clientHeight;
+    const ctx = sim.getContext("2d");
+    const hue = ((view.yaw + 180) % 360);
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, `hsl(${hue}, 45%, ${28 + view.pitch / 4}%)`);
+    g.addColorStop(1, `hsl(${hue}, 35%, 12%)`);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = "rgba(255,255,255,.85)"; ctx.font = "bold 34px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(`yaw ${view.yaw.toFixed(0)}°  pitch ${view.pitch.toFixed(0)}°`, w / 2, h / 2 - 60);
+  }
+
+  // ---------- цикл наведения ----------
+  function loop() {
+    if (!usingCamera) drawSim();
+    // ближайшая неснятая цель
+    let best = null, bestD = 1e9;
+    for (const t of TARGETS) { if (t.done) continue; const d = angDist(t); if (d < bestD) { bestD = d; best = t; } }
+
+    if (best) {
+      const vfov = HFOV * (overlay.clientHeight / overlay.clientWidth);
+      const dx = norm180(best.yaw - view.yaw), dy = best.pitch - view.pitch;
+      const x = 50 + dx / (HFOV / 2) * 50, y = 50 - dy / (vfov / 2) * 50;
+      marker.style.display = "block";
+      marker.style.left = Math.max(4, Math.min(96, x)) + "%";
+      marker.style.top = Math.max(8, Math.min(92, y)) + "%";
+      marker.classList.toggle("near", bestD < TOL * 2.2);
+      if (bestD < TOL && Math.abs(dx) < HFOV / 2 && Math.abs(dy) < vfov / 2) capture(best);
+    } else {
+      marker.style.display = "none";
+      hint.textContent = "Готово! Нажми «Готово · скачать»";
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- захват кадра ----------
+  let busy = false;
+  function capture(target) {
+    if (busy) return; busy = true;
+    const sw = usingCamera ? (video.videoWidth || 1280) : sim.width;
+    const sh = usingCamera ? (video.videoHeight || 960) : sim.height;
+    grab.width = 1024; grab.height = Math.round(1024 * sh / sw);
+    const ctx = grab.getContext("2d");
+    ctx.drawImage(usingCamera ? video : sim, 0, 0, grab.width, grab.height);
+    grab.toBlob((blob) => {
+      frames.push({ blob, yaw: +view.yaw.toFixed(2), pitch: +view.pitch.toFixed(2), roll: +view.roll.toFixed(2) });
+      if (target) target.done = true;
+      updateProgress();
+      flash.classList.remove("on"); void flash.offsetWidth; flash.classList.add("on");
+      if (navigator.vibrate) navigator.vibrate(30);
+      setTimeout(() => { busy = false; }, 350);
+    }, "image/jpeg", 0.9);
+  }
+  function updateProgress() {
+    const done = TARGETS.filter((t) => t.done).length;
+    barFill.style.width = (done / TARGETS.length * 100) + "%";
+    count.textContent = `${done} / ${TARGETS.length}`;
+    $("finish").disabled = frames.length === 0;
+  }
+
+  // ---------- выгрузка: zip кадров + manifest (store, без зависимостей) ----------
+  async function finish() {
+    const files = [];
+    const manFrames = [];
+    for (let i = 0; i < frames.length; i++) {
+      const f = frames[i];
+      const name = `${sceneId}/f${String(i).padStart(3, "0")}.jpg`;
+      files.push({ name, data: new Uint8Array(await f.blob.arrayBuffer()) });
+      manFrames.push({ file: name, yaw: f.yaw, pitch: f.pitch, roll: f.roll });
+    }
+    const manifest = {
+      tour: { id: "capture", name: "Съёмка" },
+      scenes: [{ id: sceneId, order: 1, capture: { hfov: HFOV, frames: manFrames } }],
+      settings: { autorotate: false },
+    };
+    files.push({ name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest, null, 2)) });
+
+    const zip = makeZip(files);
+    const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `capture-${Date.now()}.zip`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    hint.textContent = `Скачано ${frames.length} кадров + manifest.json`;
+  }
+
+  // минимальный ZIP (метод store, CRC32) — JPEG уже сжаты
+  const CRC = (() => { const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+  function makeZip(files) {
+    const enc = new TextEncoder(); const chunks = []; const central = []; let offset = 0;
+    const u16 = (n) => [n & 255, (n >>> 8) & 255];
+    const u32 = (n) => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
+    for (const f of files) {
+      const name = enc.encode(f.name); const crc = crc32(f.data); const sz = f.data.length;
+      const lh = [].concat(u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0),
+        u32(crc), u32(sz), u32(sz), u16(name.length), u16(0));
+      const lhu = new Uint8Array(lh); chunks.push(lhu, name, f.data);
+      const ch = [].concat(u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0),
+        u32(crc), u32(sz), u32(sz), u16(name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset));
+      central.push({ head: new Uint8Array(ch), name });
+      offset += lhu.length + name.length + sz;
+    }
+    let cstart = offset, csize = 0; const cparts = [];
+    for (const c of central) { cparts.push(c.head, c.name); csize += c.head.length + c.name.length; }
+    const eocd = new Uint8Array([].concat(u32(0x06054b50), u16(0), u16(0),
+      u16(central.length), u16(central.length), u32(csize), u32(cstart), u16(0)));
+    const total = offset + csize + eocd.length; const out = new Uint8Array(total); let p = 0;
+    for (const c of chunks) { out.set(c, p); p += c.length; }
+    for (const c of cparts) { out.set(c, p); p += c.length; }
+    out.set(eocd, p); return out;
+  }
+
+  // ---------- запуск ----------
+  async function begin() {
+    // на iOS доступ к гироскопу — только по жесту и через запрос
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+      try { await DeviceOrientationEvent.requestPermission(); } catch (e) {}
+    }
+    window.addEventListener("deviceorientation", onOrient, true);
+    await initCamera();
+    $("start").style.display = "none";
+    overlay.style.display = "block";
+    updateProgress();
+    setTimeout(enableDragSim, 1200); // если гироскоп молчит — включаем имитацию
+    loop();
+  }
+
+  $("begin").addEventListener("click", begin);
+  $("calib").addEventListener("click", () => { yawOffset += view.yaw; });
+  $("shoot").addEventListener("click", () => capture(
+    TARGETS.filter((t) => !t.done).sort((a, b) => angDist(a) - angDist(b))[0]));
+  $("finish").addEventListener("click", finish);
+  $("modeLine").textContent = (typeof DeviceOrientationEvent !== "undefined")
+    ? "Телефон: камера + гироскоп. Десктоп: имитация мышью." : "";
+})();
+</script>
+</body>
+</html>
