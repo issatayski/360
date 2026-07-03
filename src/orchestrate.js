@@ -78,10 +78,14 @@ function main() {
   // 0. stitch (опционально, когда есть capture-сцены)
   if (hasCapture) {
     const width = String(args.width || 4096);
-    const code = run('stitch', py, [
+    const blend = args.blend || 'best';       // best+expcomp — резко, без ступенек на швах
+    const stitchArgs = [
       'src/stitch/stitch.py', '--manifest', manifest, '--frames', indir,
-      '--out', 'work/stitched', '--width', width,
-    ]);
+      '--out', 'work/stitched', '--width', width, '--blend', blend,
+    ];
+    if (args.power) stitchArgs.push('--power', String(args.power));
+    if (!args['no-expcomp']) stitchArgs.push('--expcomp');
+    const code = run('stitch', py, stitchArgs);
     if (code !== 0) { console.error(`stitch упал (код ${code})`); process.exit(code || 1); }
     imagesDir = 'work/stitched';
   }

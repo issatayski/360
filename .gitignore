@@ -4,4 +4,7 @@ node_modules/
 work/
 output/
 input/*.jpg
+input/01-scene/
+input/capture-*.zip
 deploy/
+__pycache__/
