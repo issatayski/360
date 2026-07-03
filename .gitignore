@@ -4,3 +4,4 @@ node_modules/
 work/
 output/
 input/*.jpg
+deploy/
