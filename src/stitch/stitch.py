@@ -116,6 +116,11 @@ def main():
     with open(args.manifest, encoding="utf-8") as f:
         manifest = json.load(f)
     os.makedirs(args.out, exist_ok=True)
+    # детерминизм: убрать equirect от прошлых прогонов, чтобы downstream (tiler)
+    # не подхватил сцены из другого manifest.
+    for old in os.listdir(args.out):
+        if old.endswith(".jpg"):
+            os.remove(os.path.join(args.out, old))
 
     stitched = 0
     passed = 0
