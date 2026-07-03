@@ -127,6 +127,16 @@ function main() {
   ]);
   if (code !== 0) { console.error(`assemble упал (код ${code})`); process.exit(code || 1); }
 
+  // 5. package (Phase 4, опционально: --package) — отчёт клиенту + zip
+  if (args.package) {
+    code = run('package', 'node', [
+      'src/package/package.js', '--tour', tour, '--dir', out,
+      '--report', path.join('work', 'triage-report.json'),
+      '--out', path.join('output', `${tour}.zip`),
+    ]);
+    if (code !== 0) { console.error(`package упал (код ${code})`); process.exit(code || 1); }
+  }
+
   console.log(`\n✓ готово: ${out}`);
   console.log(`  просмотр:  cd ${out} && python -m http.server 8000  →  http://localhost:8000`);
 }

@@ -11,7 +11,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "archiver": "^8.0.0",
+    "archiver": "^7.0.1",
     "marzipano": "^0.10.2",
     "sharp": "^0.35.3"
   }
