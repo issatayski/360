@@ -62,17 +62,34 @@ function main() {
     console.error(`manifest не найден: ${manifest}`);
     process.exit(1);
   }
-  const tour = args.tour || JSON.parse(fs.readFileSync(manifest, 'utf8')).tour?.id || 'tour';
+  const manifestObj = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+  const tour = args.tour || manifestObj.tour?.id || 'tour';
   const out = args.out || path.join('output', tour);
   const dataOut = path.join('work', 'data.js');
   const py = pythonBin();
 
-  console.log(`orchestrate: tour=${tour}  in=${indir}  out=${out}  python=${py}`);
+  // Путь B: если сцены описаны сериями кадров (capture) — сначала склеиваем их в
+  // equirect, и дальше все стадии работают с этой папкой.
+  const hasCapture = (manifestObj.scenes || []).some((s) => s.capture && s.capture.frames);
+  let imagesDir = indir;
+
+  console.log(`orchestrate: tour=${tour}  in=${indir}  out=${out}  python=${py}${hasCapture ? '  [stitch]' : ''}`);
+
+  // 0. stitch (опционально, когда есть capture-сцены)
+  if (hasCapture) {
+    const width = String(args.width || 4096);
+    const code = run('stitch', py, [
+      'src/stitch/stitch.py', '--manifest', manifest, '--frames', indir,
+      '--out', 'work/stitched', '--width', width,
+    ]);
+    if (code !== 0) { console.error(`stitch упал (код ${code})`); process.exit(code || 1); }
+    imagesDir = 'work/stitched';
+  }
 
   // 1. triage
   if (!args['skip-triage']) {
-    const code = run('1/3 triage', py, [
-      'src/triage/validate.py', '--in', indir, '--manifest', manifest,
+    const code = run('triage', py, [
+      'src/triage/validate.py', '--in', imagesDir, '--manifest', manifest,
     ]);
     if (code === 2 && !args['allow-reject']) {
       console.error('\n✗ triage нашёл брак (reject). Переснять/исправить или запустить с --allow-reject.');
@@ -80,7 +97,7 @@ function main() {
     }
     if (code !== 0 && code !== 2) { console.error(`triage упал (код ${code})`); process.exit(code || 1); }
   } else {
-    console.log('\n=== 1/3 triage — пропущено (--skip-triage) ===');
+    console.log('\n=== triage — пропущено (--skip-triage) ===');
   }
 
   // 2. tiler (Phase 2, опционально: --tile). Иначе single-equirect (Phase 1).
@@ -88,7 +105,7 @@ function main() {
   if (args.tile) {
     const face = String(args.face || 2048);
     const code = run('tiler', 'node', [
-      'src/tiler/tile.js', '--in', indir, '--out', 'work/tiles', '--face', face,
+      'src/tiler/tile.js', '--in', imagesDir, '--out', 'work/tiles', '--face', face,
     ]);
     if (code !== 0) { console.error(`tiler упал (код ${code})`); process.exit(code || 1); }
     tilesArgs = ['--tiles', 'work/tiles'];
@@ -96,7 +113,7 @@ function main() {
 
   // 3. generator
   let code = run('generator', 'node', [
-    'src/generator/build-data.js', '--manifest', manifest, '--images', indir, '--out', dataOut,
+    'src/generator/build-data.js', '--manifest', manifest, '--images', imagesDir, '--out', dataOut,
     ...tilesArgs,
   ]);
   if (code !== 0) { console.error(`generator упал (код ${code})`); process.exit(code || 1); }
@@ -105,7 +122,7 @@ function main() {
   code = run('assemble', 'node', [
     'src/assemble/assemble.js',
     '--template', 'templates/marzipano-base',
-    '--data', dataOut, '--images', indir, '--out', out,
+    '--data', dataOut, '--images', imagesDir, '--out', out,
     ...tilesArgs,
   ]);
   if (code !== 0) { console.error(`assemble упал (код ${code})`); process.exit(code || 1); }

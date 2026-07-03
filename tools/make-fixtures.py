@@ -63,11 +63,45 @@ def base_pano(label, base):
     return img
 
 
+def make_capture(out_dir, base_pano_img, scene_id="01-hall", hfov=70.0, wf=800, hf=600):
+    """Нарезать equirect на серию плоских кадров под известными углами (эмуляция
+    съёмки телефоном) + capture-манифест — тестовые данные для пути B (stitch)."""
+    import json
+    import numpy as np
+    import py360convert
+
+    e = np.asarray(base_pano_img.convert("RGB"))
+    vfov = float(np.rad2deg(2 * np.arctan(np.tan(np.deg2rad(hfov) / 2) * hf / wf)))
+    poses = []
+    for pitch, step in [(0, 45), (40, 45), (-40, 45), (75, 90), (-75, 90)]:
+        poses += [(float(y), float(pitch)) for y in range(0, 360, step)]
+    poses += [(0.0, 90.0), (0.0, -90.0)]  # зенит/надир
+
+    fdir = os.path.join(out_dir, scene_id)
+    os.makedirs(fdir, exist_ok=True)
+    frames = []
+    for k, (yaw, pitch) in enumerate(poses):
+        pers = py360convert.e2p(e, fov_deg=(hfov, vfov), u_deg=yaw, v_deg=pitch,
+                                out_hw=(hf, wf), mode="bilinear")
+        fn = f"{scene_id}/f{k:02d}.jpg"
+        Image.fromarray(pers).save(os.path.join(out_dir, fn), "JPEG", quality=95)
+        frames.append({"file": fn, "yaw": yaw, "pitch": pitch, "roll": 0})
+
+    manifest = {"tour": {"id": "captest", "name": "Capture test"},
+                "scenes": [{"id": scene_id, "order": 1,
+                            "capture": {"hfov": hfov, "frames": frames}}]}
+    with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    print(f"wrote {len(frames)} кадров + manifest.json (capture) -> {out_dir}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="input")
     ap.add_argument("--varied", action="store_true",
                     help="добавить брак/enhance-кейсы для проверки triage")
+    ap.add_argument("--capture", action="store_true",
+                    help="сгенерировать серию кадров + capture-манифест (путь B, stitch)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
@@ -75,6 +109,9 @@ def main():
         img = base_pano(label, base)
         img.save(os.path.join(args.out, sid + ".jpg"), "JPEG", quality=88)
         print("wrote", sid)
+
+    if args.capture:
+        make_capture(os.path.join(args.out, "frames"), base_pano("HALL", (44, 62, 90)))
 
     if args.varied:
         # мягко размыто -> enhance
