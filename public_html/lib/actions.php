@@ -128,6 +128,7 @@ function wrap_pi(float $a): float
 /** Все переходы тура (для вьюера). */
 function tour_hotspots(int $tour_id): array
 {
+    ensure_hotspots_table();
     $st = db()->prepare('SELECT * FROM hotspots WHERE tour_id = ? ORDER BY id');
     $st->execute([$tour_id]);
     return $st->fetchAll();
@@ -136,6 +137,7 @@ function tour_hotspots(int $tour_id): array
 /** Исходящие переходы сцены + название целевой сцены (для редактора). */
 function scene_out_hotspots(int $scene_id): array
 {
+    ensure_hotspots_table();
     $st = db()->prepare(
         'SELECT hs.*, s.title AS to_title FROM hotspots hs
          JOIN scenes s ON s.id = hs.to_scene_id
@@ -164,6 +166,7 @@ function hotspot_exists(int $from, int $to): bool
 /** Добавить переход from→to и авто-обратный to→from. Возвращает id прямого перехода. */
 function add_hotspot(int $tour_id, int $uid, int $from, int $to, float $yaw, float $pitch): int
 {
+    ensure_hotspots_table();
     if (!own_tour($tour_id, $uid)) throw new RuntimeException('Тур не найден');
     if ($from === $to) throw new RuntimeException('Нельзя связать сцену саму с собой');
     if (!scene_in_tour($from, $tour_id) || !scene_in_tour($to, $tour_id)) {
@@ -190,6 +193,7 @@ function add_hotspot(int $tour_id, int $uid, int $from, int $to, float $yaw, flo
 /** Удалить один переход (проверка владения через тур). */
 function delete_hotspot(int $hotspot_id, int $uid): bool
 {
+    ensure_hotspots_table();
     $st = db()->prepare(
         'SELECT hs.id FROM hotspots hs JOIN tours t ON t.id = hs.tour_id
          WHERE hs.id = ? AND t.user_id = ?'

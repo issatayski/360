@@ -76,18 +76,6 @@ function ensure_schema(): void
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE
         )");
-        $pdo->exec("CREATE TABLE IF NOT EXISTS hotspots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tour_id INTEGER NOT NULL,
-            from_scene_id INTEGER NOT NULL,
-            to_scene_id INTEGER NOT NULL,
-            yaw REAL NOT NULL DEFAULT 0,
-            pitch REAL NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE,
-            FOREIGN KEY (from_scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
-            FOREIGN KEY (to_scene_id) REFERENCES scenes(id) ON DELETE CASCADE
-        )");
     } else {
         $pdo->exec("CREATE TABLE IF NOT EXISTS users (
             id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -118,6 +106,35 @@ function ensure_schema(): void
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT fk_scenes_tour FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    }
+    ensure_hotspots_table();
+}
+
+/**
+ * Идемпотентно создаёт таблицу hotspots. Вызывается автоматически из функций,
+ * которые с ней работают, — чтобы на shared-хостинге не требовалась ручная миграция.
+ * Один проход за запрос (статический флаг).
+ */
+function ensure_hotspots_table(): void
+{
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    $pdo = db();
+    if (DB_DRIVER === 'sqlite') {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS hotspots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tour_id INTEGER NOT NULL,
+            from_scene_id INTEGER NOT NULL,
+            to_scene_id INTEGER NOT NULL,
+            yaw REAL NOT NULL DEFAULT 0,
+            pitch REAL NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE,
+            FOREIGN KEY (from_scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+            FOREIGN KEY (to_scene_id) REFERENCES scenes(id) ON DELETE CASCADE
+        )");
+    } else {
         $pdo->exec("CREATE TABLE IF NOT EXISTS hotspots (
             id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
             tour_id INT UNSIGNED NOT NULL,
