@@ -44,8 +44,10 @@ foreach ($scenes as $i => $s) $sceneTitleById[(int)$s['id']] = $s['title'] !== '
 <link rel="stylesheet" href="assets/app.css">
 <style>
   #pano{position:relative;width:100%;height:60vh;min-height:320px;background:#000;border-radius:12px;overflow:hidden;}
-  .pnlm-hotspot.hs-arrow{height:32px;width:32px;background:#0a84ff;border:2px solid #fff;border-radius:50%;
-    box-shadow:0 2px 8px rgba(0,0,0,.5);}
+  .hs-arrow{height:40px;width:40px;margin:-20px 0 0 -20px;background:#0a84ff;border:3px solid #fff;
+    border-radius:50%;box-shadow:0 2px 10px rgba(0,0,0,.55);pointer-events:auto;}
+  .hs-arrow::after{content:'➜';position:absolute;inset:0;display:flex;align-items:center;
+    justify-content:center;color:#fff;font-size:20px;font-weight:900;}
   .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0;}
   .hint{font-size:13px;color:var(--muted);}
 </style>

@@ -87,13 +87,16 @@ $config = [
     background:rgba(255,255,255,.18);color:#fff;cursor:pointer;backdrop-filter:blur(6px);white-space:nowrap;}
   #menu button.active{background:#0a84ff;}
   #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#bbb;}
-  /* стрелки-переходы */
-  .pnlm-hotspot.hs-arrow{width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;
-    background:rgba(10,132,255,.92);border:3px solid #fff;box-shadow:0 3px 12px rgba(0,0,0,.5);
-    cursor:pointer;transition:transform .12s;}
-  .pnlm-hotspot.hs-arrow:hover{transform:scale(1.12);}
-  .pnlm-hotspot.hs-arrow::after{content:'➜';position:absolute;inset:0;display:flex;
-    align-items:center;justify-content:center;color:#fff;font-size:22px;font-weight:900;}
+  /* стрелки-переходы (класс задаётся через cssClass Pannellum → селектор без .pnlm-hotspot) */
+  .hs-arrow{width:50px;height:50px;margin:-25px 0 0 -25px;border-radius:50%;
+    background:rgba(10,132,255,.95);border:3px solid #fff;box-shadow:0 3px 14px rgba(0,0,0,.55);
+    cursor:pointer;transition:transform .12s; pointer-events:auto;
+    animation:hsPulse 1.8s ease-in-out infinite;}
+  .hs-arrow:hover{transform:scale(1.15);}
+  .hs-arrow::after{content:'➜';position:absolute;inset:0;display:flex;
+    align-items:center;justify-content:center;color:#fff;font-size:24px;font-weight:900;}
+  @keyframes hsPulse{0%,100%{box-shadow:0 3px 14px rgba(0,0,0,.55),0 0 0 0 rgba(10,132,255,.5);}
+    50%{box-shadow:0 3px 14px rgba(0,0,0,.55),0 0 0 12px rgba(10,132,255,0);}}
 </style>
 </head>
 <body>
