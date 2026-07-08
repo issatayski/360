@@ -49,8 +49,8 @@ try {
 <div class="card">
   <h1><?= $ok ? '✅ Готово' : '⚠️ Есть проблема' ?></h1>
   <ul>
-    <?php foreach ($log as $line): ?>
-      <li class="<?= str_starts_with($line, 'ОШИБКА') || str_starts_with($line, 'ВНИМАНИЕ') ? 'bad' : 'ok' ?>"><?= h($line) ?></li>
+    <?php foreach ($log as $line): $bad = (strpos($line, 'ОШИБКА') === 0 || strpos($line, 'ВНИМАНИЕ') === 0); ?>
+      <li class="<?= $bad ? 'bad' : 'ok' ?>"><?= h($line) ?></li>
     <?php endforeach; ?>
   </ul>
   <?php if ($ok): ?>

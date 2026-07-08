@@ -1,4 +1,6 @@
 # Папка загрузок: отдаём только картинки, запрещаем исполнение скриптов.
+# (Без php_flag — на хостингах с PHP-FPM/CGI он вызывает 500. Достаточно запрета
+#  запуска скриптов по расширению.)
 Options -Indexes
 <FilesMatch "\.(php|phtml|php3|php4|php5|php7|pht|pl|py|cgi|asp|aspx|sh|jsp)$">
   <IfModule mod_authz_core.c>Require all denied</IfModule>
@@ -7,6 +9,3 @@ Options -Indexes
     Deny from all
   </IfModule>
 </FilesMatch>
-<IfModule mod_php.c>php_flag engine off</IfModule>
-<IfModule mod_php7.c>php_flag engine off</IfModule>
-<IfModule mod_php8.c>php_flag engine off</IfModule>

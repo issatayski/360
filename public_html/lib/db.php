@@ -16,14 +16,25 @@ function db(): PDO
         PDO::ATTR_EMULATE_PREPARES   => false,
     ];
 
-    if (DB_DRIVER === 'sqlite') {
-        $dir = dirname(DB_SQLITE_PATH);
-        if (!is_dir($dir)) @mkdir($dir, 0775, true);
-        $pdo = new PDO('sqlite:' . DB_SQLITE_PATH, null, null, $opts);
-        $pdo->exec('PRAGMA foreign_keys = ON');
-    } else {
-        $dsn = 'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=' . DB_CHARSET;
-        $pdo = new PDO($dsn, DB_USER, DB_PASS, $opts);
+    try {
+        if (DB_DRIVER === 'sqlite') {
+            $dir = dirname(DB_SQLITE_PATH);
+            if (!is_dir($dir)) @mkdir($dir, 0775, true);
+            $pdo = new PDO('sqlite:' . DB_SQLITE_PATH, null, null, $opts);
+            $pdo->exec('PRAGMA foreign_keys = ON');
+        } else {
+            $dsn = 'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=' . DB_CHARSET;
+            $pdo = new PDO($dsn, DB_USER, DB_PASS, $opts);
+        }
+    } catch (PDOException $e) {
+        // Понятное сообщение вместо голого 500 (частая причина — неверные креды в config.php).
+        http_response_code(500);
+        header('Content-Type: text/html; charset=utf-8');
+        echo '<h2>Нет подключения к базе данных</h2>';
+        echo '<p>Проверь <code>lib/config.php</code>: DB_NAME / DB_USER / DB_PASS / DB_HOST. '
+           . 'На cPanel имя базы и пользователя обычно с префиксом аккаунта.</p>';
+        echo '<p style="color:#888">Деталь: ' . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . '</p>';
+        exit;
     }
     return $pdo;
 }
