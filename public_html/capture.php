@@ -1,6 +1,8 @@
 <?php
-// capture.php?tour=ID — режим A: съёмка (камера+гироскоп) + WebGL-склейка в equirect,
-// затем отправка собранной панорамы в тур через api/upload_scene.php.
+// capture.php?tour=ID — режим A: съёмка 360 (кольцо + стрелки-подсказки, автоснимок),
+// сшивка в браузере (CPU), автосохранение в тур через api/upload_scene.php.
+// Механика съёмки перенесена из отдельного приложения «Пано 360» (понравившийся
+// пользователю вариант) и интегрирована в платформу (логин + тур + CSRF).
 require_once __DIR__ . '/lib/auth.php';
 require_once __DIR__ . '/lib/actions.php';
 
@@ -10,418 +12,492 @@ $tour = own_tour($tour_id, (int)$user['id']);
 if (!$tour) redirect('dashboard.php');
 $token = csrf_token();
 ?>
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Съёмка 360° — <?= h($tour['name']) ?></title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Съёмка 360° — <?= htmlspecialchars($tour['name'], ENT_QUOTES, 'UTF-8') ?></title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  html, body { height: 100%; overflow: hidden; background: #0b0d12; color: #fff;
-    font-family: -apple-system, Segoe UI, Roboto, sans-serif; touch-action: none; }
-  .screen { position: absolute; inset: 0; display: none; }
-  .screen.on { display: block; }
-  /* центрируемые экраны показываем flex-ом только когда активны (id+class > id,
-     иначе #start/#build с display:flex были бы видны всегда и накладывались) */
-  #start.on, #build.on { display: flex; }
-  button { border: none; border-radius: 12px; padding: 13px 18px; font-size: 15px; font-weight: 600;
-    background: rgba(255,255,255,.16); color: #fff; cursor: pointer; }
-  button.primary { background: #0a84ff; } button.good { background: #34c759; }
-  button:disabled { opacity: .4; cursor: default; }
-  a.link { color: #7fb0ff; font-size: 14px; }
+  :root{
+    --bg:#0B0E11; --panel:#151A20; --line:#2A323C;
+    --text:#F5F7F4; --muted:#9DA8B4;
+    --accent:#FFB020; --ok:#3FD68C; --danger:#FF5A5A; --radius:18px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%; overflow:hidden;}
+  body{background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; font-size:19px; line-height:1.45;}
+  .screen{position:fixed; inset:0; display:none; flex-direction:column; overflow:hidden;}
+  .screen.active{display:flex;}
+  .scroll{overflow-y:auto; -webkit-overflow-scrolling:touch; flex:1; padding:20px;}
+  h1{font-size:28px; font-weight:800; letter-spacing:-0.5px;}
+  h2{font-size:21px; font-weight:700; margin-bottom:8px;}
+  .sub{color:var(--muted); font-size:16px;}
+  a.link{color:#7fb0ff;}
+  .btn{display:flex; align-items:center; justify-content:center; gap:10px; width:100%;
+    min-height:58px; padding:14px 18px; background:var(--accent); color:#14100A; border:none;
+    border-radius:var(--radius); font-size:20px; font-weight:800; font-family:inherit; cursor:pointer;}
+  .btn:active{transform:scale(0.98);}
+  .btn.secondary{background:var(--panel); color:var(--text); border:2px solid var(--line);}
+  .btn.small{min-height:48px; font-size:16px; width:auto; padding:8px 16px;}
+  .btn:disabled{opacity:0.4;}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px; margin-bottom:14px;}
+  input[type=text]{width:100%; min-height:52px; padding:10px 14px; margin-top:6px; background:#0F1318;
+    color:var(--text); border:2px solid var(--line); border-radius:12px; font-size:18px; font-family:inherit;}
+  label.setting{display:block; margin-top:12px; font-size:16px; color:var(--muted);}
+  input[type=range]{width:100%; height:36px; accent-color:var(--accent);}
+  select{width:100%; min-height:52px; padding:10px 14px; margin-top:6px; background:#0F1318; color:var(--text);
+    border:2px solid var(--line); border-radius:12px; font-size:18px; font-family:inherit;}
+  .warn{background:#241A08; border:1px solid #5A430F; color:#FFD98A; border-radius:12px;
+    padding:12px 14px; font-size:15px; margin-bottom:14px;}
 
-  #start { flex-direction: column; align-items: center; justify-content: center;
-    text-align: center; padding: 28px; gap: 16px; }
-  #start h1 { font-size: 24px; } #start p { opacity: .7; max-width: 440px; line-height: 1.5; font-size: 15px; }
-  #start .mode { font-size: 12px; opacity: .45; margin-top: 8px; }
+  #capture{background:#000;}
+  #videoWrap{position:absolute; inset:0;}
+  #video{width:100%; height:100%; object-fit:cover;}
+  #hud{position:absolute; inset:0; pointer-events:none;}
+  #ring{position:absolute; left:50%; top:45%; transform:translate(-50%,-50%); width:180px; height:180px;
+    border-radius:50%; border:6px solid var(--accent); transition:border-color .15s;
+    display:flex; align-items:center; justify-content:center;}
+  #ring.locked{border-color:var(--ok); box-shadow:0 0 40px rgba(63,214,140,.55);}
+  #ring .dot{width:14px; height:14px; border-radius:50%; background:var(--accent);}
+  #ring.locked .dot{background:var(--ok);}
+  #arrows{position:absolute; left:50%; top:45%; transform:translate(-50%,-50%); width:260px; height:260px;}
+  .arrow{position:absolute; font-size:44px; font-weight:900; color:var(--accent);
+    text-shadow:0 2px 8px rgba(0,0,0,.8); display:none;}
+  .arrow.show{display:block;}
+  #arrL{left:-30px; top:50%; transform:translateY(-50%);}
+  #arrR{right:-30px; top:50%; transform:translateY(-50%);}
+  #arrU{top:-34px; left:50%; transform:translateX(-50%);}
+  #arrD{bottom:-34px; left:50%; transform:translateX(-50%);}
+  #capTop{position:absolute; top:0; left:0; right:0; padding:16px 18px; display:flex;
+    justify-content:space-between; align-items:center; background:linear-gradient(rgba(0,0,0,.7),transparent);}
+  #capProgress{font-size:24px; font-weight:800;}
+  #capHint{position:absolute; left:0; right:0; top:62%; text-align:center; font-size:19px; font-weight:700;
+    text-shadow:0 2px 6px rgba(0,0,0,.9); padding:0 24px;}
+  #capBottom{position:absolute; bottom:0; left:0; right:0; padding:18px; display:flex; gap:12px;
+    align-items:center; background:linear-gradient(transparent,rgba(0,0,0,.75));}
+  #capBottom .btn, #capTop .btn{pointer-events:auto;}
+  #shutter{width:84px; height:84px; min-height:84px; border-radius:50%; background:#fff; color:#000; font-size:15px; flex:none;}
+  #flash{position:absolute; inset:0; background:#fff; opacity:0; pointer-events:none; transition:opacity .18s;}
+  #flash.on{opacity:.85;}
+  #rotateWarn{position:absolute; inset:0; z-index:9; display:none; align-items:center; justify-content:center;
+    text-align:center; background:rgba(0,0,0,.88); font-size:23px; font-weight:800; padding:30px;}
+  #rotateWarn.show{display:flex;}
 
-  #video, #sim { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  #sim { display: none; }
-  .reticle { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px;
-    transform: translate(-50%, -50%); border: 2px solid rgba(255,255,255,.8); border-radius: 50%; }
-  .reticle::before, .reticle::after { content: ''; position: absolute; background: rgba(255,255,255,.8); }
-  .reticle::before { left: 50%; top: 20%; width: 2px; height: 60%; transform: translateX(-50%); }
-  .reticle::after { top: 50%; left: 20%; height: 2px; width: 60%; transform: translateY(-50%); }
-  #marker { position: absolute; width: 84px; height: 84px; transform: translate(-50%, -50%);
-    border: 3px solid #4cd964; border-radius: 50%; box-shadow: 0 0 16px rgba(76,217,100,.6); display: none; }
-  #marker.near { border-color: #ffd60a; box-shadow: 0 0 22px rgba(255,214,10,.8); }
-  #hud { position: absolute; top: 0; left: 0; right: 0; padding: 14px 16px;
-    background: linear-gradient(rgba(0,0,0,.5), transparent); display: flex; gap: 12px; align-items: center; }
-  #bar { flex: 1; height: 8px; border-radius: 4px; background: rgba(255,255,255,.25); overflow: hidden; }
-  #barFill { height: 100%; width: 0; background: #4cd964; transition: width .2s; }
-  #count { font-variant-numeric: tabular-nums; font-size: 15px; min-width: 54px; text-align: right; }
-  #hint { position: absolute; left: 50%; bottom: 128px; transform: translateX(-50%);
-    background: rgba(0,0,0,.55); padding: 8px 16px; border-radius: 999px; font-size: 14px; white-space: nowrap; }
-  #capControls { position: absolute; left: 0; right: 0; bottom: 0;
-    padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
-    background: linear-gradient(transparent, rgba(0,0,0,.55)); display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
-  .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
-  .flash.on { animation: fl .25s; } @keyframes fl { from { opacity: .8; } to { opacity: 0; } }
-
-  #build { flex-direction: column; align-items: center; justify-content: center; padding: 28px; gap: 18px; text-align: center; }
-  #build h2 { font-size: 20px; } #buildStatus { opacity: .75; font-size: 14px; min-height: 20px; }
-  #pbar { width: 100%; max-width: 360px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.2); overflow: hidden; }
-  #pfill { height: 100%; width: 0; background: #0a84ff; transition: width .15s; }
-  #preview { max-width: 90%; max-height: 42vh; border-radius: 10px; display: none; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
-  #buildBtns { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
-  .err { color: #ff6b6b; font-size: 13px; max-width: 90%; }
+  #stitch .scroll{display:flex; flex-direction:column; justify-content:center; text-align:center;}
+  .barWrap{width:100%; height:26px; background:var(--panel); border:1px solid var(--line);
+    border-radius:13px; overflow:hidden; margin:18px 0;}
+  #bar{height:100%; width:0%; background:var(--accent); transition:width .2s;}
+  #stitchPct{font-size:44px; font-weight:900;}
+  .err{background:#2A1112; border:1px solid #6B2226; color:#FFB3B6; border-radius:12px;
+    padding:12px 14px; font-size:15px; margin-top:14px;}
 </style>
 </head>
 <body>
 
-<!-- START -->
-<div class="screen on" id="start">
-  <h1>Съёмка 360°</h1>
-  <p>Встань в центр комнаты, держи телефон вертикально и вращайся вокруг себя, наводя
-     перекрестие в зелёные круги — кадр снимется сам. Пройди все кольца.</p>
-  <button class="primary" id="goShoot">📷 Начать съёмку</button>
-  <a class="link" href="tour_edit.php?id=<?= (int)$tour_id ?>">← вернуться в тур</a>
-  <div class="mode" id="modeLine"></div>
+<!-- ========== СТАРТ / НАСТРОЙКИ ========== -->
+<div class="screen active" id="start">
+  <div class="scroll">
+    <h1>Съёмка 360°</h1>
+    <p class="sub" style="margin-top:6px">Тур: «<?= htmlspecialchars($tour['name'], ENT_QUOTES, 'UTF-8') ?>». Панорама сохранится в него автоматически.</p>
+
+    <div class="warn" id="httpsWarn" style="display:none">
+      Камера и гироскоп работают только по HTTPS. Открой эту страницу по адресу с https://
+    </div>
+    <div class="warn" id="gyroWarn" style="display:none">
+      На этом устройстве нет гироскопа — автоматическая съёмка 360 недоступна. Открой со смартфона.
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>Как снимать</h2>
+      <p class="sub">1. Встань в центр комнаты и не сходи с места.<br>
+      2. Держи телефон вертикально, вращайся вокруг себя.<br>
+      3. Наводи кольцо на цель — снимок сделается сам.<br>
+      4. Всего 22 кадра: круг прямо, вверх и вниз.</p>
+    </div>
+
+    <div class="card">
+      <h2>Настройки</h2>
+      <label class="setting">Название сцены (необязательно)</label>
+      <input type="text" id="sceneName" placeholder="Гостиная">
+      <label class="setting">Угол обзора камеры по ширине: <b id="fovVal" style="color:var(--text)">50°</b></label>
+      <input type="range" id="fovRange" min="40" max="70" value="50" step="1">
+      <p class="sub">Разрывы между кадрами — увеличь. Двоение — уменьши.</p>
+      <label class="setting">Размер панорамы</label>
+      <select id="qualitySel">
+        <option value="2048">2048 × 1024 — быстро, для слабых телефонов</option>
+        <option value="3072" selected>3072 × 1536 — баланс</option>
+        <option value="4096">4096 × 2048 — максимум качества</option>
+      </select>
+    </div>
+
+    <button class="btn" id="btnNewRoom">📷&nbsp;Начать съёмку</button>
+    <div style="height:12px"></div>
+    <a class="link" href="tour_edit.php?id=<?= (int)$tour_id ?>">← вернуться в тур</a>
+  </div>
 </div>
 
-<!-- CAPTURE -->
+<!-- ========== ЭКРАН СЪЁМКИ ========== -->
 <div class="screen" id="capture">
-  <video id="video" playsinline muted autoplay></video>
-  <canvas id="sim"></canvas>
-  <canvas id="grab" style="display:none"></canvas>
-  <div class="flash" id="flash"></div>
-  <div class="reticle"></div>
-  <div id="marker"></div>
-  <div id="hud"><div id="bar"><div id="barFill"></div></div><div id="count">0 / 0</div></div>
-  <div id="hint">Наведи перекрестие в зелёный круг</div>
-  <div id="capControls">
-    <button id="calib">Задать «вперёд»</button>
-    <button id="shoot" class="primary">Снять кадр</button>
-    <button id="build0" class="good" disabled>Собрать 360°</button>
+  <div id="videoWrap"><video id="video" autoplay muted playsinline></video></div>
+  <div id="hud">
+    <div id="capTop">
+      <div id="capProgress">0 / 22</div>
+      <button class="btn small secondary" id="btnCancelCap">Отмена</button>
+    </div>
+    <div id="arrows">
+      <span class="arrow" id="arrL">←</span><span class="arrow" id="arrR">→</span>
+      <span class="arrow" id="arrU">↑</span><span class="arrow" id="arrD">↓</span>
+    </div>
+    <div id="ring"><div class="dot"></div></div>
+    <div id="capHint">Поворачивайтесь к цели</div>
+    <div id="capBottom">
+      <button class="btn secondary" id="btnFinishCap" disabled>Завершить</button>
+      <button class="btn" id="shutter">Снять</button>
+    </div>
+    <div id="flash"></div>
+    <div id="rotateWarn">Поверните телефон вертикально 📱</div>
   </div>
 </div>
 
-<!-- BUILD + UPLOAD -->
-<div class="screen" id="build">
-  <h2>Собираю панораму…</h2>
-  <div id="pbar"><div id="pfill"></div></div>
-  <div id="buildStatus">Готовлю кадры…</div>
-  <img id="preview" alt="equirect preview">
-  <div id="buildBtns" style="display:none">
-    <button class="good" id="sendBtn">✔ Добавить в тур</button>
-    <button id="againBtn">Снять заново</button>
+<!-- ========== ЭКРАН СШИВКИ / СОХРАНЕНИЯ ========== -->
+<div class="screen" id="stitch">
+  <div class="scroll">
+    <h1 id="stitchTitle">Сшиваю панораму…</h1>
+    <p class="sub" style="margin-top:8px">Не закрывайте страницу.</p>
+    <div class="barWrap"><div id="bar"></div></div>
+    <div id="stitchPct">0%</div>
+    <div class="err" id="stitchErr" style="display:none"></div>
   </div>
-  <div class="err" id="buildErr"></div>
 </div>
 
 <script>
 "use strict";
 (function () {
-  const $ = (id) => document.getElementById(id);
-  const DEG = Math.PI / 180;
+  const $ = id => document.getElementById(id);
+  const D2R = Math.PI/180, R2D = 180/Math.PI;
   const TOUR_ID = <?= (int)$tour_id ?>;
   const CSRF = <?= json_encode($token) ?>;
 
-  const screens = ["start", "capture", "build"];
-  function show(name) { for (const s of screens) $(s).classList.toggle("on", s === name); }
+  const state = {
+    currentRoom: null, hfovDeg: 50, panoW: 3072,
+    orient: null, stream: null, capturing: false, lockStart: 0, wakeLock: null, gyroSeen: false,
+  };
 
-  // ---------- СЪЁМКА (камера + гироскоп) ----------
-  const HFOV = 65, TOL = 6;
-  const RINGS = [
-    { pitch: 0, count: 8 }, { pitch: 40, count: 8 }, { pitch: -40, count: 8 },
-    { pitch: 72, count: 4 }, { pitch: -72, count: 4 }, { pitch: 90, count: 1 }, { pitch: -90, count: 1 },
-  ];
-  let TARGETS = [];
-  function resetTargets() {
-    TARGETS = [];
-    for (const r of RINGS) for (let i = 0; i < r.count; i++)
-      TARGETS.push({ yaw: (i * 360 / r.count), pitch: r.pitch, done: false });
+  function show(id){
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+    $(id).classList.add('active');
   }
 
-  const video = $("video"), sim = $("sim"), grab = $("grab");
-  const marker = $("marker"), barFill = $("barFill"), count = $("count"), hint = $("hint"), flash = $("flash");
-  const view = { yaw: 0, pitch: 0, roll: 0 };
-  let yawOffset = 0, orientationOK = false, usingCamera = false, running = false;
-  let frames = [];
-
-  const norm180 = (d) => { d = ((d + 180) % 360 + 360) % 360 - 180; return d; };
-  const angDist = (t) => Math.hypot(norm180(t.yaw - view.yaw), t.pitch - view.pitch);
-
-  function onOrient(e) {
-    if (e.alpha == null) return;
-    orientationOK = true;
-    view.yaw = norm180(-e.alpha - yawOffset);
-    view.pitch = Math.max(-90, Math.min(90, e.beta - 90));
-    view.roll = e.gamma || 0;
-  }
-  let simWired = false;
-  function enableDragSim() {
-    if (orientationOK || simWired) return; simWired = true;
-    hint.textContent = "Мышь/палец: тяни, чтобы осмотреться (имитация гироскопа)";
-    let px = 0, py = 0, drag = false;
-    const dn = (x, y) => { drag = true; px = x; py = y; };
-    const mv = (x, y) => { if (!drag) return; view.yaw = norm180(view.yaw + (x - px) * 0.3);
-      view.pitch = Math.max(-90, Math.min(90, view.pitch - (y - py) * 0.3)); px = x; py = y; };
-    const cap = $("capture");
-    cap.addEventListener("mousedown", (e) => dn(e.clientX, e.clientY));
-    window.addEventListener("mousemove", (e) => mv(e.clientX, e.clientY));
-    window.addEventListener("mouseup", () => drag = false);
-    cap.addEventListener("touchstart", (e) => dn(e.touches[0].clientX, e.touches[0].clientY));
-    cap.addEventListener("touchmove", (e) => { mv(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); });
-    cap.addEventListener("touchend", () => drag = false);
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+    $('httpsWarn').style.display = 'block';
   }
 
-  async function initCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 960 } }, audio: false });
-      video.srcObject = stream; usingCamera = true; video.style.display = "block"; sim.style.display = "none";
-    } catch (err) { usingCamera = false; video.style.display = "none"; sim.style.display = "block"; }
-  }
-  function drawSim() {
-    const w = sim.width = sim.clientWidth, h = sim.height = sim.clientHeight;
-    const ctx = sim.getContext("2d");
-    const hue = ((view.yaw + 180) % 360);
-    const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, `hsl(${hue}, 45%, ${28 + view.pitch / 4}%)`);
-    g.addColorStop(1, `hsl(${hue}, 35%, 12%)`);
-    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = "rgba(255,255,255,.85)"; ctx.font = "bold 30px sans-serif"; ctx.textAlign = "center";
-    ctx.fillText(`yaw ${view.yaw.toFixed(0)}°  pitch ${view.pitch.toFixed(0)}°`, w / 2, h / 2 - 60);
-  }
-  function loop() {
-    if (!running) return;
-    if (!usingCamera) drawSim();
-    let best = null, bestD = 1e9;
-    for (const t of TARGETS) { if (t.done) continue; const d = angDist(t); if (d < bestD) { bestD = d; best = t; } }
-    const capEl = $("capture");
-    if (best) {
-      const vfov = HFOV * (capEl.clientHeight / capEl.clientWidth);
-      const dx = norm180(best.yaw - view.yaw), dy = best.pitch - view.pitch;
-      const x = 50 + dx / (HFOV / 2) * 50, y = 50 - dy / (vfov / 2) * 50;
-      marker.style.display = "block";
-      marker.style.left = Math.max(4, Math.min(96, x)) + "%";
-      marker.style.top = Math.max(8, Math.min(92, y)) + "%";
-      marker.classList.toggle("near", bestD < TOL * 2.2);
-      if (bestD < TOL && Math.abs(dx) < HFOV / 2 && Math.abs(dy) < vfov / 2) capture(best);
-    } else { marker.style.display = "none"; hint.textContent = "Все цели сняты — жми «Собрать 360°»"; }
-    requestAnimationFrame(loop);
-  }
-  let busy = false;
-  function capture(target) {
-    if (busy) return; busy = true;
-    const sw = usingCamera ? (video.videoWidth || 1280) : sim.width;
-    const sh = usingCamera ? (video.videoHeight || 960) : sim.height;
-    grab.width = 1024; grab.height = Math.round(1024 * sh / sw);
-    grab.getContext("2d").drawImage(usingCamera ? video : sim, 0, 0, grab.width, grab.height);
-    grab.toBlob((blob) => {
-      frames.push({ blob, yaw: +view.yaw.toFixed(2), pitch: +view.pitch.toFixed(2), roll: +view.roll.toFixed(2) });
-      if (target) target.done = true;
-      updateProgress();
-      flash.classList.remove("on"); void flash.offsetWidth; flash.classList.add("on");
-      if (navigator.vibrate) navigator.vibrate(30);
-      setTimeout(() => { busy = false; }, 350);
-    }, "image/jpeg", 0.9);
-  }
-  function updateProgress() {
-    const done = TARGETS.filter((t) => t.done).length;
-    barFill.style.width = (done / TARGETS.length * 100) + "%";
-    count.textContent = `${done} / ${TARGETS.length}`;
-    $("build0").disabled = frames.length === 0;
-  }
-  async function startCapture() {
-    frames = []; resetTargets(); running = true; yawOffset = 0; orientationOK = false;
-    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-      try { await DeviceOrientationEvent.requestPermission(); } catch (e) {}
-    }
-    window.addEventListener("deviceorientation", onOrient, true);
-    await initCamera();
-    show("capture"); updateProgress();
-    setTimeout(enableDragSim, 1200);
-    loop();
-  }
-  function stopCamera() {
-    running = false;
-    const s = video.srcObject; if (s) { s.getTracks().forEach((t) => t.stop()); video.srcObject = null; }
-  }
-
-  // ---------- СКЛЕЙКА В EQUIRECT НА WebGL2 (порт stitch.py) ----------
-  function Rx(a){const c=Math.cos(a),s=Math.sin(a);return[[1,0,0],[0,c,-s],[0,s,c]];}
-  function Ry(a){const c=Math.cos(a),s=Math.sin(a);return[[c,0,s],[0,1,0],[-s,0,c]];}
-  function rodrigues(k,th){const c=Math.cos(th),s=Math.sin(th),C=1-c,[x,y,z]=k;return[
-    [c+x*x*C, x*y*C-z*s, x*z*C+y*s],[y*x*C+z*s, c+y*y*C, y*z*C-x*s],[z*x*C-y*s, z*y*C+x*s, c+z*z*C]];}
-  function mul(a,b){const r=[[0,0,0],[0,0,0],[0,0,0]];
-    for(let i=0;i<3;i++)for(let j=0;j<3;j++){let s=0;for(let k=0;k<3;k++)s+=a[i][k]*b[k][j];r[i][j]=s;}return r;}
-  function vecMat(v,M){return[v[0]*M[0][0]+v[1]*M[1][0]+v[2]*M[2][0],
-    v[0]*M[0][1]+v[1]*M[1][1]+v[2]*M[2][1], v[0]*M[0][2]+v[1]*M[1][2]+v[2]*M[2][2]];}
-  function frameM(yaw,pitch,roll){
-    const u=-yaw*DEG, v=pitch*DEG, ir=roll*DEG;
-    const RxM=Rx(v), RyM=Ry(u);
-    let ax=vecMat([0,0,1],RxM); ax=vecMat(ax,RyM);
-    const n=Math.hypot(ax[0],ax[1],ax[2])||1; ax=[ax[0]/n,ax[1]/n,ax[2]/n];
-    return mul(mul(RxM,RyM), rodrigues(ax,ir));
-  }
-  function colMajor(M){ return new Float32Array([M[0][0],M[1][0],M[2][0],M[0][1],M[1][1],M[2][1],M[0][2],M[1][2],M[2][2]]); }
-
-  const VS = `#version 300 es
-  in vec2 aPos; out vec2 vUV;
-  void main(){ vUV = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }`;
-  const FS_ACCUM = `#version 300 es
-  precision highp float;
-  in vec2 vUV; uniform sampler2D uTex; uniform mat3 uM;
-  uniform float uXmax, uYmax, uPower; out vec4 frag;
-  const float PI = 3.14159265358979;
-  void main(){
-    float lon = (vUV.x-0.5)*2.0*PI;
-    float lat = (vUV.y-0.5)*PI;
-    float cl = cos(lat);
-    vec3 world = vec3(cl*sin(lon), sin(lat), cl*cos(lon));
-    vec3 cam = uM*world;
-    if(cam.z <= 1e-6){ frag = vec4(0.0); return; }
-    float xn = cam.x/cam.z, yn = cam.y/cam.z;
-    if(abs(xn) > uXmax || abs(yn) > uYmax){ frag = vec4(0.0); return; }
-    float fx = (xn+uXmax)/(2.0*uXmax);
-    float fy = (uYmax-yn)/(2.0*uYmax);
-    vec3 c = texture(uTex, vec2(fx,fy)).rgb;
-    float wx = clamp(1.0-abs(xn)/uXmax, 0.0, 1.0);
-    float wy = clamp(1.0-abs(yn)/uYmax, 0.0, 1.0);
-    float w = pow(wx*wy, uPower);
-    frag = vec4(c*w, w);
-  }`;
-  const FS_NORM = `#version 300 es
-  precision highp float;
-  in vec2 vUV; uniform sampler2D uAccum; out vec4 frag;
-  void main(){ vec4 a = texture(uAccum, vUV); frag = vec4(a.a > 1e-5 ? a.rgb/a.a : vec3(0.0), 1.0); }`;
-
-  function compile(gl, type, src) {
-    const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh);
-    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error("shader: " + gl.getShaderInfoLog(sh));
-    return sh;
-  }
-  function program(gl, vs, fs) {
-    const p = gl.createProgram();
-    gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vs));
-    gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fs));
-    gl.bindAttribLocation(p, 0, "aPos"); gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error("link: " + gl.getProgramInfoLog(p));
-    return p;
-  }
-  async function stitchEquirect(items, W, power, onProgress) {
-    const H = W / 2;
-    const canvas = document.createElement("canvas"); canvas.width = W; canvas.height = H;
-    const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
-    if (!gl) throw new Error("WebGL2 недоступен в этом браузере");
-    if (!gl.getExtension("EXT_color_buffer_float")) throw new Error("нет float-текстур (EXT_color_buffer_float)");
-    const quad = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    const accumTex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, accumTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, W, H, 0, gl.RGBA, gl.HALF_FLOAT, null);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    const fbo = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, accumTex, 0);
-    const progAccum = program(gl, VS, FS_ACCUM);
-    const progNorm = program(gl, VS, FS_NORM);
-    const uM = gl.getUniformLocation(progAccum, "uM");
-    const uXmax = gl.getUniformLocation(progAccum, "uXmax");
-    const uYmax = gl.getUniformLocation(progAccum, "uYmax");
-    const uPower = gl.getUniformLocation(progAccum, "uPower");
-    gl.viewport(0, 0, W, H);
-    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.useProgram(progAccum);
-    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-    gl.uniform1f(uPower, power);
-    const frameTex = gl.createTexture();
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      const bmp = it.bitmap || await createImageBitmap(it.blob);
-      const Wf = bmp.width, Hf = bmp.height;
-      const hfov = (it.hfov || HFOV) * DEG;
-      const vfov = 2 * Math.atan(Math.tan(hfov / 2) * Hf / Wf);
-      gl.bindTexture(gl.TEXTURE_2D, frameTex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.uniformMatrix3fv(uM, false, colMajor(frameM(it.yaw, it.pitch, it.roll || 0)));
-      gl.uniform1f(uXmax, Math.tan(hfov / 2));
-      gl.uniform1f(uYmax, Math.tan(vfov / 2));
-      gl.drawArrays(gl.TRIANGLES, 0, 6);
-      if (bmp.close) bmp.close();
-      if (onProgress) onProgress((i + 1) / items.length);
-      if (i % 4 === 3) await new Promise((r) => requestAnimationFrame(r));
-    }
-    gl.disable(gl.BLEND);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, W, H);
-    gl.useProgram(progNorm);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, accumTex);
-    gl.uniform1i(gl.getUniformLocation(progNorm, "uAccum"), 0);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    return await new Promise((res) => canvas.toBlob((b) => res({ blob: b, width: W }), "image/jpeg", 0.92));
-  }
-
-  // ---------- ПОТОК: собрать → отправить ----------
-  let lastBlob = null, lastUrl = null;
-  function pickWidth() { return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ? 2048 : 4096; }
-
-  async function buildFromCapture() {
-    stopCamera(); show("build");
-    $("buildBtns").style.display = "none"; $("preview").style.display = "none"; $("buildErr").textContent = "";
-    $("pfill").style.width = "0%"; $("build").querySelector("h2").textContent = "Собираю панораму…";
-    const items = frames.map((f) => ({ blob: f.blob, yaw: f.yaw, pitch: f.pitch, roll: f.roll, hfov: HFOV }));
-    $("buildStatus").textContent = `Кадров: ${items.length}. Склеиваю на GPU…`;
-    try {
-      const W = pickWidth();
-      const out = await stitchEquirect(items, W, 6.0, (p) => { $("pfill").style.width = (p * 100).toFixed(0) + "%"; });
-      lastBlob = out.blob;
-      if (lastUrl) URL.revokeObjectURL(lastUrl);
-      lastUrl = URL.createObjectURL(out.blob);
-      $("preview").src = lastUrl; $("preview").style.display = "block";
-      $("build").querySelector("h2").textContent = "Готово";
-      $("buildStatus").textContent = `Панорама ${W}×${W / 2}. Проверь и добавь в тур.`;
-      $("buildBtns").style.display = "flex";
-    } catch (e) {
-      $("build").querySelector("h2").textContent = "Не удалось собрать";
-      $("buildErr").textContent = e.message || String(e);
-      $("buildBtns").style.display = "flex";
-    }
-  }
-
-  async function sendToTour() {
-    if (!lastBlob) return;
-    $("sendBtn").disabled = true; $("buildErr").textContent = "";
-    $("buildStatus").textContent = "Отправляю в тур…";
-    try {
-      const fd = new FormData();
-      fd.append("csrf", CSRF);
-      fd.append("tour_id", String(TOUR_ID));
-      fd.append("image", lastBlob, "scene.jpg");
-      const r = await fetch("api/upload_scene.php", { method: "POST", body: fd });
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || "Ошибка загрузки");
-      window.location.href = j.redirect || ("tour_edit.php?id=" + TOUR_ID);
-    } catch (e) {
-      $("sendBtn").disabled = false;
-      $("buildErr").textContent = e.message || String(e);
-      $("buildStatus").textContent = "";
-    }
-  }
-
-  $("goShoot").addEventListener("click", startCapture);
-  $("calib").addEventListener("click", () => { yawOffset += view.yaw; });
-  $("shoot").addEventListener("click", () => {
-    const t = TARGETS.filter((t) => !t.done).sort((a, b) => angDist(a) - angDist(b))[0];
-    capture(t || null);
+  // ---- настройки (с памятью) ----
+  $('fovRange').addEventListener('input', e=>{
+    state.hfovDeg = +e.target.value; $('fovVal').textContent = state.hfovDeg + '°';
+    try{ localStorage.setItem('pano_fov', state.hfovDeg); }catch(e){}
   });
-  $("build0").addEventListener("click", buildFromCapture);
-  $("sendBtn").addEventListener("click", sendToTour);
-  $("againBtn").addEventListener("click", startCapture);
-  $("modeLine").textContent = (typeof DeviceOrientationEvent !== "undefined")
-    ? "Телефон: камера + гироскоп. Компьютер: имитация мышью (для проверки)." : "";
+  $('qualitySel').addEventListener('change', e=>{
+    state.panoW = +e.target.value;
+    try{ localStorage.setItem('pano_w', state.panoW); }catch(e){}
+  });
+  try{
+    const f = +localStorage.getItem('pano_fov');
+    if (f >= 40 && f <= 70){ state.hfovDeg=f; $('fovRange').value=f; $('fovVal').textContent=f+'°'; }
+    const w = +localStorage.getItem('pano_w');
+    if ([2048,3072,4096].includes(w)){ state.panoW=w; $('qualitySel').value=w; }
+  }catch(e){}
+
+  // ---- математика ориентации ----
+  function rotMat(alphaDeg, betaDeg, gammaDeg){
+    const a=alphaDeg*D2R, b=betaDeg*D2R, g=gammaDeg*D2R;
+    const ca=Math.cos(a), sa=Math.sin(a), cb=Math.cos(b), sb=Math.sin(b), cg=Math.cos(g), sg=Math.sin(g);
+    return [ ca*cg - sa*sb*sg, -sa*cb, ca*sg + sa*sb*cg,
+             sa*cg + ca*sb*sg,  ca*cb, sa*sg - ca*sb*cg,
+             -cb*sg,            sb,    cb*cg ];
+  }
+  function camDir(R){ return [-R[2], -R[5], -R[8]]; }
+  function dirToYawPitch(f){ return { yaw: Math.atan2(f[0], f[1]),
+    pitch: Math.asin(Math.max(-1, Math.min(1, f[2]))) }; }
+  function angDiff(a,b){ let d=a-b; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI; return d; }
+
+  window.addEventListener('deviceorientation', e=>{
+    if (e.alpha===null || e.beta===null || e.gamma===null) return;
+    state.gyroSeen = true;
+    state.orient = { alpha:e.alpha, beta:e.beta, gamma:e.gamma };
+  });
+  setTimeout(()=>{ if (!state.gyroSeen && !('ontouchstart' in window)) $('gyroWarn').style.display='block'; }, 3000);
+
+  // ---- цели: 3 кольца (горизонт 10, +55° 6, -55° 6) ----
+  function makeTargets(yaw0){
+    const t = [];
+    [{p:0,n:10},{p:55,n:6},{p:-55,n:6}].forEach(r=>{
+      for(let i=0;i<r.n;i++){
+        let y = yaw0 + i*(2*Math.PI/r.n);
+        while(y>Math.PI)y-=2*Math.PI; while(y<-Math.PI)y+=2*Math.PI;
+        t.push({yaw:y, pitch:r.p*D2R, done:false});
+      }
+    });
+    return t;
+  }
+
+  // ---- съёмка ----
+  $('btnNewRoom').addEventListener('click', startCapture);
+  $('btnCancelCap').addEventListener('click', ()=>stopCapture(false));
+  $('btnFinishCap').addEventListener('click', ()=>stopCapture(true));
+  $('shutter').addEventListener('click', ()=>snap(true));
+
+  async function startCapture(){
+    try{
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+        const p = await DeviceOrientationEvent.requestPermission();
+        if (p !== 'granted'){ alert('Без доступа к датчикам движения съёмка 360 невозможна.'); return; }
+      }
+    }catch(e){}
+    try{
+      state.stream = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode:'environment', width:{ideal:1920}, height:{ideal:1080} }, audio:false });
+    }catch(e){
+      alert('Нет доступа к камере: ' + e.message + '\nОткройте страницу по HTTPS и разрешите камеру.');
+      return;
+    }
+    const v = $('video'); v.srcObject = state.stream;
+    try{ await v.play(); }catch(e){}
+    try{ if (navigator.wakeLock) state.wakeLock = await navigator.wakeLock.request('screen'); }catch(e){}
+
+    state.currentRoom = { shots: [], targets: null };
+    state.capturing = true; state.lockStart = 0;
+    $('capProgress').textContent = '0 / 22'; $('btnFinishCap').disabled = true;
+    show('capture'); requestAnimationFrame(captureLoop);
+  }
+
+  function stopCapture(finish){
+    if (!state.capturing) return;
+    state.capturing = false;
+    if (state.stream){ state.stream.getTracks().forEach(t=>t.stop()); state.stream=null; }
+    if (state.wakeLock){ state.wakeLock.release().catch(()=>{}); state.wakeLock=null; }
+    const room = state.currentRoom;
+    if (finish && room && room.shots.length >= 8){ runStitch(room); }
+    else {
+      if (finish) alert('Слишком мало кадров для панорамы (нужно хотя бы 8).');
+      state.currentRoom = null; show('start');
+    }
+  }
+
+  function isLandscape(){
+    if (screen.orientation && screen.orientation.type) return screen.orientation.type.startsWith('landscape');
+    return window.innerWidth > window.innerHeight;
+  }
+
+  function captureLoop(){
+    if (!state.capturing) return;
+    requestAnimationFrame(captureLoop);
+    $('rotateWarn').classList.toggle('show', isLandscape());
+    if (isLandscape()) return;
+    if (!state.orient){ $('capHint').textContent='Ожидаю данные гироскопа…'; return; }
+
+    const R = rotMat(state.orient.alpha, state.orient.beta, state.orient.gamma);
+    const cur = dirToYawPitch(camDir(R));
+    const room = state.currentRoom;
+    if (!room.targets) room.targets = makeTargets(cur.yaw);
+
+    const pending = room.targets.filter(t=>!t.done);
+    const done = room.targets.length - pending.length;
+    $('capProgress').textContent = done + ' / ' + room.targets.length;
+    $('btnFinishCap').disabled = done < Math.ceil(room.targets.length*0.6);
+    if (!pending.length){ stopCapture(true); return; }
+
+    let best=null, bestD=Infinity;
+    pending.forEach(t=>{
+      const dy=angDiff(t.yaw,cur.yaw), dp=t.pitch-cur.pitch;
+      const d=Math.hypot(dy*Math.cos(cur.pitch), dp);
+      if(d<bestD){bestD=d; best=t;}
+    });
+    const dy = angDiff(best.yaw, cur.yaw)*R2D, dp = (best.pitch - cur.pitch)*R2D;
+    $('arrL').classList.toggle('show', dy < -6);
+    $('arrR').classList.toggle('show', dy >  6);
+    $('arrU').classList.toggle('show', dp >  5);
+    $('arrD').classList.toggle('show', dp < -5);
+
+    const aligned = Math.abs(dy)<=7 && Math.abs(dp)<=6;
+    $('ring').classList.toggle('locked', aligned);
+    if (aligned){
+      if (!state.lockStart) state.lockStart = performance.now();
+      $('capHint').textContent = 'Держите ровно…';
+      if (performance.now() - state.lockStart > 550){ snap(false, best, R); state.lockStart = 0; }
+    } else {
+      state.lockStart = 0;
+      const parts=[];
+      if (Math.abs(dy)>6) parts.push((dy>0?'вправо ':'влево ') + Math.round(Math.abs(dy)) + '°');
+      if (Math.abs(dp)>5) parts.push((dp>0?'выше ':'ниже ') + Math.round(Math.abs(dp)) + '°');
+      $('capHint').textContent = parts.join(', ') || 'Наведите кольцо на цель';
+    }
+  }
+
+  function snap(manual, target, Rnow){
+    const room = state.currentRoom;
+    if (!room || !state.orient || !state.capturing) return;
+    const R = Rnow || rotMat(state.orient.alpha, state.orient.beta, state.orient.gamma);
+    if (!target && room.targets){
+      const cur = dirToYawPitch(camDir(R));
+      let best=null, bestD=Infinity;
+      room.targets.filter(t=>!t.done).forEach(t=>{
+        const d=Math.hypot(angDiff(t.yaw,cur.yaw)*Math.cos(cur.pitch), t.pitch-cur.pitch);
+        if(d<bestD){bestD=d; best=t;}
+      });
+      target = best;
+    }
+    if (target) target.done = true;
+    const v = $('video');
+    if (!v.videoWidth) return;
+    const scale = Math.min(1, 1100 / Math.max(v.videoWidth, v.videoHeight));
+    const c = document.createElement('canvas');
+    c.width  = Math.round(v.videoWidth * scale);
+    c.height = Math.round(v.videoHeight * scale);
+    c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+    room.shots.push({ canvas:c, R });
+    $('flash').classList.add('on'); setTimeout(()=>$('flash').classList.remove('on'), 180);
+    if (navigator.vibrate) navigator.vibrate(40);
+  }
+
+  // ---- сшивка (CPU, проекция каждого кадра на equirect) ----
+  function setProgress(f){
+    const p = Math.max(0, Math.min(100, Math.round(f*100)));
+    $('bar').style.width = p + '%'; $('stitchPct').textContent = p + '%';
+  }
+
+  async function runStitch(room){
+    show('stitch'); $('stitchErr').style.display='none';
+    $('stitchTitle').textContent = 'Сшиваю панораму…'; setProgress(0);
+    const W = state.panoW, H = W/2, hfov = state.hfovDeg * D2R;
+
+    let acc, wgt;
+    try{ acc = new Float32Array(W*H*3); wgt = new Float32Array(W*H); }
+    catch(e){ fail('Недостаточно памяти для этого размера. Выберите размер меньше в настройках.'); return; }
+
+    for (let s=0; s<room.shots.length; s++){
+      await projectShot(room.shots[s], acc, wgt, W, H, hfov, frac => setProgress((s + frac) / room.shots.length * 0.85));
+    }
+
+    const out = document.createElement('canvas');
+    out.width = W; out.height = H;
+    const ctx = out.getContext('2d');
+    const img = ctx.createImageData(W, H); const px = img.data;
+    for (let i=0, n=W*H; i<n; i++){
+      const w = wgt[i], o = i*4;
+      if (w > 0){ px[o]=acc[i*3]/w; px[o+1]=acc[i*3+1]/w; px[o+2]=acc[i*3+2]/w; }
+      else { px[o]=30; px[o+1]=33; px[o+2]=38; }
+      px[o+3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    room.shots = []; acc = wgt = null; setProgress(0.88);
+
+    $('stitchTitle').textContent = 'Сохраняю в тур…';
+    const blob = await new Promise(res => out.toBlob(res, 'image/jpeg', 0.87));
+    if (!blob){ fail('Не удалось подготовить изображение.'); return; }
+
+    while (true){
+      try{
+        await uploadToTour(blob, f => setProgress(0.88 + f*0.12));
+        setProgress(1);
+        window.location.href = 'tour_edit.php?id=' + TOUR_ID;
+        return;
+      }catch(e){
+        if (!confirm('Не удалось сохранить на сервер:\n' + e.message + '\n\nПовторить попытку?')){
+          fail('Сохранение отменено. Можно переснять.');
+          return;
+        }
+      }
+    }
+  }
+
+  function fail(msg){
+    $('stitchTitle').textContent = 'Не удалось';
+    const el = $('stitchErr'); el.textContent = msg; el.style.display = 'block';
+    setTimeout(()=>show('start'), 2500);
+  }
+
+  function uploadToTour(blob, onProgress){
+    return new Promise((resolve, reject)=>{
+      const fd = new FormData();
+      fd.append('csrf', CSRF);
+      fd.append('tour_id', String(TOUR_ID));
+      fd.append('title', ($('sceneName').value || '').slice(0,60));
+      fd.append('image', blob, 'pano.jpg');
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', 'api/upload_scene.php');
+      xhr.timeout = 120000;
+      xhr.upload.onprogress = e => { if (e.lengthComputable && onProgress) onProgress(e.loaded/e.total); };
+      xhr.onload = ()=>{
+        try{ const j = JSON.parse(xhr.responseText);
+          if (j.ok) resolve(j); else reject(new Error(j.error || ('Код ответа ' + xhr.status)));
+        }catch(e){ reject(new Error('Некорректный ответ сервера (код ' + xhr.status + ')')); }
+      };
+      xhr.onerror   = ()=>reject(new Error('Нет связи с сервером'));
+      xhr.ontimeout = ()=>reject(new Error('Сервер не ответил вовремя'));
+      xhr.send(fd);
+    });
+  }
+
+  function projectShot(shot, acc, wgt, W, H, hfov, onProgress){
+    return new Promise(resolve=>{
+      const img = shot.canvas, iw = img.width, ih = img.height;
+      const data = img.getContext('2d').getImageData(0,0,iw,ih).data;
+      const R = shot.R;
+      const f = (iw/2) / Math.tan(hfov/2);
+      const vfovHalf = Math.atan((ih/2)/f);
+      const cw = iw/2, ch = ih/2;
+      const { yaw:yaw0, pitch:pitch0 } = dirToYawPitch(camDir(R));
+      const pMax = Math.min( Math.PI/2, pitch0 + vfovHalf*1.25);
+      const pMin = Math.max(-Math.PI/2, pitch0 - vfovHalf*1.25);
+      const yStart = Math.max(0,   Math.floor((Math.PI/2 - pMax)/Math.PI * H));
+      const yEnd   = Math.min(H-1, Math.ceil ((Math.PI/2 - pMin)/Math.PI * H));
+      const colC = (yaw0 + Math.PI)/(2*Math.PI) * W;
+      const hfovHalf = hfov/2;
+      const r0=R[0], r1=R[1], r2=R[2], r3=R[3], r4=R[4], r5=R[5], r6=R[6], r7=R[7], r8=R[8];
+
+      let y = yStart; const CHUNK = 32;
+      function chunk(){
+        const yStop = Math.min(yEnd, y + CHUNK);
+        for (; y<=yStop; y++){
+          const phi = Math.PI/2 - (y+0.5)/H * Math.PI;
+          const cph = Math.cos(phi), sph = Math.sin(phi);
+          const halfSpan = Math.min(Math.PI, hfovHalf*1.35 / Math.max(0.12, cph));
+          const halfPix = Math.floor(Math.min(W/2, halfSpan/(2*Math.PI) * W));
+          const rowOff = y*W;
+          for (let k=-halfPix; k<=halfPix; k++){
+            const x = ((Math.round(colC + k) % W) + W) % W;
+            const lam = (x+0.5)/W * 2*Math.PI - Math.PI;
+            const dx = cph*Math.sin(lam), dyw = cph*Math.cos(lam), dz = sph;
+            const ddx = r0*dx + r3*dyw + r6*dz;
+            const ddy = r1*dx + r4*dyw + r7*dz;
+            const ddz = r2*dx + r5*dyw + r8*dz;
+            if (ddz > -0.05) continue;
+            const t = -1/ddz;
+            const ix = cw + f*ddx*t;
+            const iy = ch - f*ddy*t;
+            if (ix<0 || iy<0 || ix>=iw-1 || iy>=ih-1) continue;
+            const wx = 1 - Math.abs(ix-cw)/cw;
+            const wy = 1 - Math.abs(iy-ch)/ch;
+            const w = wx*wy*wx*wy + 1e-4;
+            const x0=ix|0, y0=iy|0, fx=ix-x0, fy=iy-y0;
+            const i00=(y0*iw+x0)*4, i01=i00+4, i10=i00+iw*4, i11=i10+4;
+            const w00=(1-fx)*(1-fy), w01=fx*(1-fy), w10=(1-fx)*fy, w11=fx*fy;
+            const pi = rowOff + x;
+            acc[pi*3]   += w*(data[i00]*w00 + data[i01]*w01 + data[i10]*w10 + data[i11]*w11);
+            acc[pi*3+1] += w*(data[i00+1]*w00 + data[i01+1]*w01 + data[i10+1]*w10 + data[i11+1]*w11);
+            acc[pi*3+2] += w*(data[i00+2]*w00 + data[i01+2]*w01 + data[i10+2]*w10 + data[i11+2]*w11);
+            wgt[pi] += w;
+          }
+        }
+        onProgress((y - yStart) / Math.max(1, yEnd - yStart));
+        if (y <= yEnd) setTimeout(chunk, 0); else resolve();
+      }
+      chunk();
+    });
+  }
 })();
 </script>
 </body>
