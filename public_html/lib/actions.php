@@ -190,6 +190,22 @@ function add_hotspot(int $tour_id, int $uid, int $from, int $to, float $yaw, flo
     return $id;
 }
 
+/** Переставить стрелку (обновить позицию yaw/pitch). Проверка владения через тур. */
+function reposition_hotspot(int $hotspot_id, int $uid, float $yaw, float $pitch): bool
+{
+    ensure_hotspots_table();
+    $st = db()->prepare(
+        'SELECT hs.id FROM hotspots hs JOIN tours t ON t.id = hs.tour_id
+         WHERE hs.id = ? AND t.user_id = ?'
+    );
+    $st->execute([$hotspot_id, $uid]);
+    if (!$st->fetch()) return false;
+    $yaw = wrap_pi($yaw);
+    $pitch = max(-M_PI / 2, min(M_PI / 2, $pitch));
+    return db()->prepare('UPDATE hotspots SET yaw = ?, pitch = ? WHERE id = ?')
+        ->execute([$yaw, $pitch, $hotspot_id]);
+}
+
 /** Удалить один переход (проверка владения через тур). */
 function delete_hotspot(int $hotspot_id, int $uid): bool
 {

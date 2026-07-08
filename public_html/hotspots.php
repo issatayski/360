@@ -77,6 +77,12 @@ foreach ($scenes as $i => $s) $sceneTitleById[(int)$s['id']] = $s['title'] !== '
 
     <div id="pano"></div>
 
+    <div id="moveBanner" style="display:none;background:#0d2a4a;border:1px solid #1e4d80;color:#cfe4ff;
+      margin-top:12px;padding:10px 14px;border-radius:10px;font-size:14px">
+      Переставляю стрелку «<b id="moveTitle"></b>»: наведи центр на нужное место и нажми «Поставить по центру» или тапни точку.
+      <button class="btn small ghost" id="moveCancel" style="margin-left:8px">Отмена</button>
+    </div>
+
     <div class="toolbar">
       <label class="small muted">Куда ведёт стрелка:
         <select id="toSel" style="margin-top:0;min-height:40px">
@@ -101,7 +107,11 @@ foreach ($scenes as $i => $s) $sceneTitleById[(int)$s['id']] = $s['title'] !== '
           <li class="tour-item" data-id="<?= (int)$h['id'] ?>">
             <span>→ <?= h($h['to_title'] !== '' ? $h['to_title'] : ('Сцена #' . $h['to_scene_id'])) ?>
               <span class="muted small">(yaw <?= round((float)$h['yaw'] * $RAD2DEG) ?>°)</span></span>
-            <button class="btn small ghost hs-del" data-id="<?= (int)$h['id'] ?>">Удалить</button>
+            <span class="row" style="gap:6px">
+              <button class="btn small ghost hs-move" data-id="<?= (int)$h['id'] ?>"
+                data-title="<?= h($h['to_title'] !== '' ? $h['to_title'] : ('Сцена #' . $h['to_scene_id'])) ?>">Переставить</button>
+              <button class="btn small ghost hs-del" data-id="<?= (int)$h['id'] ?>">Удалить</button>
+            </span>
           </li>
         <?php endforeach; ?>
       </ul>
@@ -150,12 +160,43 @@ foreach ($scenes as $i => $s) $sceneTitleById[(int)$s['id']] = $s['title'] !== '
       .catch(function (e) { alert('Не удалось: ' + e.message); });
   }
 
-  // Поставить по центру взгляда
+  // Режим перестановки существующей стрелки
+  var repositionId = null;
+  function enterReposition(id, title) {
+    repositionId = id;
+    document.getElementById('moveTitle').textContent = title;
+    document.getElementById('moveBanner').style.display = 'block';
+    document.getElementById('pano').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  function exitReposition() {
+    repositionId = null;
+    document.getElementById('moveBanner').style.display = 'none';
+  }
+  document.getElementById('moveCancel').addEventListener('click', exitReposition);
+
+  // Единая точка постановки: если идёт перестановка — двигаем, иначе создаём новую
+  function placeAt(yawDeg, pitchDeg) {
+    if (repositionId) {
+      var DEG2RAD = Math.PI / 180;
+      var fd = new FormData();
+      fd.append('csrf', CSRF);
+      fd.append('hotspot_id', String(repositionId));
+      fd.append('yaw', String(yawDeg * DEG2RAD));
+      fd.append('pitch', String(pitchDeg * DEG2RAD));
+      fetch('api/move_hotspot.php', { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { if (!j.ok) throw new Error(j.error || 'Ошибка'); location.reload(); })
+        .catch(function (e) { alert('Не удалось: ' + e.message); });
+      return;
+    }
+    addHotspot(yawDeg, pitchDeg);
+  }
+
   document.getElementById('placeCenter').addEventListener('click', function () {
-    addHotspot(viewer.getYaw(), viewer.getPitch());
+    placeAt(viewer.getYaw(), viewer.getPitch());
   });
 
-  // Тап по панораме (не драг): ставим стрелку в точку клика
+  // Тап по панораме (не драг)
   var down = null;
   var el = document.getElementById('pano');
   el.addEventListener('pointerdown', function (e) { down = { x: e.clientX, y: e.clientY, t: Date.now() }; });
@@ -164,10 +205,17 @@ foreach ($scenes as $i => $s) $sceneTitleById[(int)$s['id']] = $s['title'] !== '
     var moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
     var dt = Date.now() - down.t;
     down = null;
-    if (moved < 10 && dt < 500 && document.getElementById('toSel').value) {
+    if (moved < 10 && dt < 500 && (repositionId || document.getElementById('toSel').value)) {
       var c = viewer.mouseEventToCoords(e); // [pitch, yaw] в градусах
-      addHotspot(c[1], c[0]);
+      placeAt(c[1], c[0]);
     }
+  });
+
+  // Кнопки «Переставить» в списке
+  Array.prototype.forEach.call(document.querySelectorAll('.hs-move'), function (btn) {
+    btn.addEventListener('click', function () {
+      enterReposition(this.dataset.id, this.dataset.title || 'переход');
+    });
   });
 
   // Удаление перехода
