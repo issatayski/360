@@ -44,3 +44,6 @@ const ASPECT_TOLERANCE = 0.15;
 
 // Имя cookie-сессии.
 const SESSION_NAME = 'tour360_sess';
+// Своя папка для файлов сессий (дефолтный save_path на shared-хостинге бывает
+// недоступен на запись → сессия не сохраняется → «Неверный CSRF-токен»).
+const SESSION_SAVE_PATH = __DIR__ . '/../data/sessions';

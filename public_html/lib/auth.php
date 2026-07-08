@@ -7,15 +7,27 @@ require_once __DIR__ . '/helpers.php';
 
 function auth_boot(): void
 {
-    if (session_status() === PHP_SESSION_NONE) {
-        session_name(SESSION_NAME);
-        session_set_cookie_params([
-            'httponly' => true,
-            'samesite' => 'Lax',
-            'secure'   => (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'),
-        ]);
-        session_start();
-    }
+    if (session_status() !== PHP_SESSION_NONE) return;
+
+    // Пишем сессии в свою папку — дефолтный save_path на shared-хостинге часто
+    // недоступен, из-за чего $_SESSION не сохраняется и падает проверка CSRF.
+    $dir = SESSION_SAVE_PATH;
+    if (!is_dir($dir)) @mkdir($dir, 0700, true);
+    if (is_dir($dir) && is_writable($dir)) @session_save_path($dir);
+
+    // HTTPS может терминироваться на прокси — учитываем X-Forwarded-Proto и порт.
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+        || ((int)($_SERVER['SERVER_PORT'] ?? 0) === 443);
+
+    session_name(SESSION_NAME);
+    session_set_cookie_params([
+        'path'     => '/',
+        'httponly' => true,
+        'samesite' => 'Lax',
+        'secure'   => $https,
+    ]);
+    session_start();
 }
 
 /** Текущий пользователь (строка из users) или null. */

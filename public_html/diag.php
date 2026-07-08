@@ -28,6 +28,16 @@ row('lib/config.php', $hasCfg, $hasCfg ? 'найден' : 'не залит');
 $uploads = __DIR__ . '/uploads';
 row('uploads/ на запись', is_dir($uploads) && is_writable($uploads), is_dir($uploads) ? ('права: ' . substr(sprintf('%o', @fileperms($uploads)), -4)) : 'папки нет');
 
+// Сессии: пишем в свою папку и проверяем, что значение переживает запись.
+$sdir = __DIR__ . '/data/sessions';
+if (!is_dir($sdir)) @mkdir($sdir, 0700, true);
+$swritable = is_dir($sdir) && is_writable($sdir);
+if ($swritable) @session_save_path($sdir);
+@session_start();
+$_SESSION['diag_probe'] = 'ok';
+$sess_ok = (session_status() === PHP_SESSION_ACTIVE) && isset($_SESSION['diag_probe']);
+row('Сессии пишутся', $sess_ok && $swritable, 'save_path: ' . session_save_path() . ($swritable ? '' : ' (НЕ пишется!)'));
+
 // Пробуем подключиться к БД, читая константы из config без его побочных эффектов.
 if ($hasCfg) {
     require $cfg;
