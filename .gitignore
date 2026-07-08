@@ -17,8 +17,9 @@ dist/
 # supabase local
 .supabase/
 
-# harness / tooling
-.claude/
+# harness / tooling — игнорируем всё в .claude, КРОМЕ версионируемых скиллов
+.claude/*
+!.claude/skills/
 .venv/
 __pycache__/
 
