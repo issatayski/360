@@ -37,7 +37,6 @@ $token = csrf_token();
       <input type="password" name="password" required autocomplete="current-password">
     </label>
     <button class="btn primary" type="submit">Войти</button>
-    <p class="muted small">Нет аккаунта? В Фазе 0 агент создаётся через <code>setup.php</code>.</p>
   </form>
 </body>
 </html>
