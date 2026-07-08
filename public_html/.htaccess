@@ -1,8 +1,9 @@
 # --- 360 Tour: корневой .htaccess ---
-Options -Indexes
-DirectoryIndex index.php
+# ВНИМАНИЕ: без "Options -Indexes" и "DirectoryIndex" — некоторые shared-хостинги
+# не разрешают эти директивы в .htaccess (AllowOverride) и отвечают 500.
+# index.php и так является индексом по умолчанию. Оставлена только защита
+# служебных файлов тем же синтаксисом, что и в lib/.htaccess (он хостом принят).
 
-# Спрятать служебные файлы от прямого доступа
 <FilesMatch "\.(sql|md|sqlite|log)$">
   <IfModule mod_authz_core.c>Require all denied</IfModule>
   <IfModule !mod_authz_core.c>
