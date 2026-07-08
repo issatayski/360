@@ -22,13 +22,16 @@ $token = csrf_token();
     font-family: -apple-system, Segoe UI, Roboto, sans-serif; touch-action: none; }
   .screen { position: absolute; inset: 0; display: none; }
   .screen.on { display: block; }
+  /* центрируемые экраны показываем flex-ом только когда активны (id+class > id,
+     иначе #start/#build с display:flex были бы видны всегда и накладывались) */
+  #start.on, #build.on { display: flex; }
   button { border: none; border-radius: 12px; padding: 13px 18px; font-size: 15px; font-weight: 600;
     background: rgba(255,255,255,.16); color: #fff; cursor: pointer; }
   button.primary { background: #0a84ff; } button.good { background: #34c759; }
   button:disabled { opacity: .4; cursor: default; }
   a.link { color: #7fb0ff; font-size: 14px; }
 
-  #start { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  #start { flex-direction: column; align-items: center; justify-content: center;
     text-align: center; padding: 28px; gap: 16px; }
   #start h1 { font-size: 24px; } #start p { opacity: .7; max-width: 440px; line-height: 1.5; font-size: 15px; }
   #start .mode { font-size: 12px; opacity: .45; margin-top: 8px; }
@@ -56,7 +59,7 @@ $token = csrf_token();
   .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
   .flash.on { animation: fl .25s; } @keyframes fl { from { opacity: .8; } to { opacity: 0; } }
 
-  #build { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 28px; gap: 18px; text-align: center; }
+  #build { flex-direction: column; align-items: center; justify-content: center; padding: 28px; gap: 18px; text-align: center; }
   #build h2 { font-size: 20px; } #buildStatus { opacity: .75; font-size: 14px; min-height: 20px; }
   #pbar { width: 100%; max-width: 360px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.2); overflow: hidden; }
   #pfill { height: 100%; width: 0; background: #0a84ff; transition: width .15s; }
