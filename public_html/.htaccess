@@ -1,0 +1,18 @@
+# --- 360 Tour: корневой .htaccess ---
+# Этот хостинг разрешает в .htaccess только mod_rewrite (как в WordPress) и 500-ит
+# на Options / Require / Deny / <FilesMatch>. Поэтому вся защита — через mod_rewrite.
+# Всё в <IfModule>, так что при отсутствии модуля файл ничего не ломает.
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Запретить прямой доступ к библиотеке (config с кредами и т.п.)
+  RewriteRule ^lib/ - [F,L]
+
+  # Запретить доступ к служебным файлам
+  RewriteRule \.(sql|sqlite|log)$ - [F,L]
+
+  # Запретить обращение к скриптам внутри папки загрузок (defense-in-depth;
+  # файлы там и так сохраняются только как .jpg/.png)
+  RewriteRule ^uploads/.*\.(php|phtml|php3|php4|php5|php7|pht|pl|py|cgi|asp|aspx|sh|jsp)$ - [F,L]
+</IfModule>
