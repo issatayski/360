@@ -1,21 +1,13 @@
-# deps
-node_modules/
-.pnp
-.pnp.js
-
-# next.js
-.next/
-out/
-build/
-dist/
-
-# env / secrets (Supabase, Replicate, payment keys)
+# secrets — реальные креды БД/API правятся прямо в lib/config.php на хосте,
+# но если заведёшь .env-подобные файлы — не коммить их
 .env
 .env*.local
-.env.local
 
-# supabase local
-.supabase/
+# app runtime data — не коммитим загрузки агентов и локальную SQLite-базу
+public_html/uploads/*
+!public_html/uploads/.htaccess
+!public_html/uploads/.gitkeep
+public_html/data/
 
 # harness / tooling — игнорируем всё в .claude, КРОМЕ версионируемых скиллов
 .claude/*
@@ -26,4 +18,3 @@ __pycache__/
 # misc
 .DS_Store
 *.log
-npm-debug.log*

@@ -1,0 +1,12 @@
+# --- 360 Tour: корневой .htaccess ---
+Options -Indexes
+DirectoryIndex index.php
+
+# Спрятать служебные файлы от прямого доступа
+<FilesMatch "\.(sql|md|sqlite|log)$">
+  <IfModule mod_authz_core.c>Require all denied</IfModule>
+  <IfModule !mod_authz_core.c>
+    Order deny,allow
+    Deny from all
+  </IfModule>
+</FilesMatch>
