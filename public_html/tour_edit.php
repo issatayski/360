@@ -113,6 +113,18 @@ $iframe = '<iframe src="' . $public_url . '" width="640" height="400" style="bor
     </div>
   </div>
 
+  <?php if (count($scenes) >= 2): ?>
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div>
+        <h3 style="margin:0">🔗 Переходы между комнатами</h3>
+        <span class="muted small">Свяжи комнаты стрелками, чтобы по туру можно было ходить.</span>
+      </div>
+      <a class="btn small primary" href="hotspots.php?tour=<?= (int)$tour['id'] ?>">Открыть редактор</a>
+    </div>
+  </div>
+  <?php endif; ?>
+
   <div class="card">
     <h3 style="margin-top:0">Сцены (<?= count($scenes) ?>)</h3>
     <?php if (!$scenes): ?>

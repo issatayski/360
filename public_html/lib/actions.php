@@ -114,6 +114,91 @@ function delete_scene(int $scene_id, int $uid): bool
     return db()->prepare('DELETE FROM scenes WHERE id = ?')->execute([$scene_id]);
 }
 
+/* ---------------- Хотспоты (переходы между сценами, Фаза 1) ---------------- */
+
+/** Нормализация угла в диапазон [-π, π]. */
+function wrap_pi(float $a): float
+{
+    $tau = 2 * M_PI;
+    $a = fmod($a + M_PI, $tau);
+    if ($a < 0) $a += $tau;
+    return $a - M_PI;
+}
+
+/** Все переходы тура (для вьюера). */
+function tour_hotspots(int $tour_id): array
+{
+    $st = db()->prepare('SELECT * FROM hotspots WHERE tour_id = ? ORDER BY id');
+    $st->execute([$tour_id]);
+    return $st->fetchAll();
+}
+
+/** Исходящие переходы сцены + название целевой сцены (для редактора). */
+function scene_out_hotspots(int $scene_id): array
+{
+    $st = db()->prepare(
+        'SELECT hs.*, s.title AS to_title FROM hotspots hs
+         JOIN scenes s ON s.id = hs.to_scene_id
+         WHERE hs.from_scene_id = ? ORDER BY hs.id'
+    );
+    $st->execute([$scene_id]);
+    return $st->fetchAll();
+}
+
+/** Проверяет, что сцена принадлежит туру. */
+function scene_in_tour(int $scene_id, int $tour_id): bool
+{
+    $st = db()->prepare('SELECT 1 FROM scenes WHERE id = ? AND tour_id = ?');
+    $st->execute([$scene_id, $tour_id]);
+    return (bool)$st->fetch();
+}
+
+/** Есть ли уже переход from→to. */
+function hotspot_exists(int $from, int $to): bool
+{
+    $st = db()->prepare('SELECT 1 FROM hotspots WHERE from_scene_id = ? AND to_scene_id = ?');
+    $st->execute([$from, $to]);
+    return (bool)$st->fetch();
+}
+
+/** Добавить переход from→to и авто-обратный to→from. Возвращает id прямого перехода. */
+function add_hotspot(int $tour_id, int $uid, int $from, int $to, float $yaw, float $pitch): int
+{
+    if (!own_tour($tour_id, $uid)) throw new RuntimeException('Тур не найден');
+    if ($from === $to) throw new RuntimeException('Нельзя связать сцену саму с собой');
+    if (!scene_in_tour($from, $tour_id) || !scene_in_tour($to, $tour_id)) {
+        throw new RuntimeException('Сцена не из этого тура');
+    }
+    $yaw = wrap_pi($yaw);
+    $pitch = max(-M_PI / 2, min(M_PI / 2, $pitch));
+
+    $ins = db()->prepare(
+        'INSERT INTO hotspots (tour_id, from_scene_id, to_scene_id, yaw, pitch) VALUES (?,?,?,?,?)'
+    );
+    if (!hotspot_exists($from, $to)) {
+        $ins->execute([$tour_id, $from, $to, $yaw, $pitch]);
+    }
+    $id = (int)db()->lastInsertId();
+
+    // Авто-обратная стрелка: ставим «за спиной» (yaw+π), pitch 0. Агент может убрать.
+    if (!hotspot_exists($to, $from)) {
+        $ins->execute([$tour_id, $to, $from, wrap_pi($yaw + M_PI), 0.0]);
+    }
+    return $id;
+}
+
+/** Удалить один переход (проверка владения через тур). */
+function delete_hotspot(int $hotspot_id, int $uid): bool
+{
+    $st = db()->prepare(
+        'SELECT hs.id FROM hotspots hs JOIN tours t ON t.id = hs.tour_id
+         WHERE hs.id = ? AND t.user_id = ?'
+    );
+    $st->execute([$hotspot_id, $uid]);
+    if (!$st->fetch()) return false;
+    return db()->prepare('DELETE FROM hotspots WHERE id = ?')->execute([$hotspot_id]);
+}
+
 /** Переставить сцену вверх/вниз в порядке тура. */
 function move_scene(int $scene_id, int $uid, string $dir): bool
 {

@@ -37,3 +37,17 @@ CREATE TABLE IF NOT EXISTS scenes (
     created_at TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_scenes_tour FOREIGN KEY (tour_id) REFERENCES tours(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Переходы-стрелки между сценами (Фаза 1)
+CREATE TABLE IF NOT EXISTS hotspots (
+    id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    tour_id       INT UNSIGNED NOT NULL,
+    from_scene_id INT UNSIGNED NOT NULL,
+    to_scene_id   INT UNSIGNED NOT NULL,
+    yaw           DOUBLE       NOT NULL DEFAULT 0,      -- радианы, позиция стрелки на панораме
+    pitch         DOUBLE       NOT NULL DEFAULT 0,      -- радианы
+    created_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_hs_tour  FOREIGN KEY (tour_id)       REFERENCES tours(id)  ON DELETE CASCADE,
+    CONSTRAINT fk_hs_from  FOREIGN KEY (from_scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+    CONSTRAINT fk_hs_to    FOREIGN KEY (to_scene_id)   REFERENCES scenes(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

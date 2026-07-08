@@ -2,6 +2,7 @@
 // view.php?slug=... — публичный вьюер тура (Pannellum). Только опубликованные туры.
 require_once __DIR__ . '/lib/db.php';
 require_once __DIR__ . '/lib/helpers.php';
+require_once __DIR__ . '/lib/actions.php';
 
 $slug = $_GET['slug'] ?? '';
 $st = db()->prepare("SELECT * FROM tours WHERE slug = ? AND status = 'published'");
@@ -41,6 +42,24 @@ foreach ($scenes as $i => $s) {
         'autoLoad' => true,
     ];
 }
+// Стрелки-переходы: клик по стрелке переключает на целевую сцену.
+$keyById = [];
+foreach ($scenes as $i => $s) $keyById[(int)$s['id']] = 'scene' . $i;
+foreach (tour_hotspots((int)$tour['id']) as $hh) {
+    $fk = $keyById[(int)$hh['from_scene_id']] ?? null;
+    $tk = $keyById[(int)$hh['to_scene_id']] ?? null;
+    if ($fk === null || $tk === null || !isset($cfgScenes[$fk])) continue;
+    if (!isset($cfgScenes[$fk]['hotSpots'])) $cfgScenes[$fk]['hotSpots'] = [];
+    $cfgScenes[$fk]['hotSpots'][] = [
+        'pitch'    => round((float)$hh['pitch'] * $RAD2DEG, 2),
+        'yaw'      => round((float)$hh['yaw'] * $RAD2DEG, 2),
+        'type'     => 'scene',
+        'sceneId'  => $tk,
+        'cssClass' => 'hs-arrow',
+        'text'     => $cfgScenes[$tk]['title'] ?? '',
+    ];
+}
+
 $config = [
     'default' => [
         'firstScene'        => $order[0] ?? '',
@@ -68,6 +87,13 @@ $config = [
     background:rgba(255,255,255,.18);color:#fff;cursor:pointer;backdrop-filter:blur(6px);white-space:nowrap;}
   #menu button.active{background:#0a84ff;}
   #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#bbb;}
+  /* стрелки-переходы */
+  .pnlm-hotspot.hs-arrow{width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;
+    background:rgba(10,132,255,.92);border:3px solid #fff;box-shadow:0 3px 12px rgba(0,0,0,.5);
+    cursor:pointer;transition:transform .12s;}
+  .pnlm-hotspot.hs-arrow:hover{transform:scale(1.12);}
+  .pnlm-hotspot.hs-arrow::after{content:'➜';position:absolute;inset:0;display:flex;
+    align-items:center;justify-content:center;color:#fff;font-size:22px;font-weight:900;}
 </style>
 </head>
 <body>
