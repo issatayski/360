@@ -62,6 +62,9 @@ $token = csrf_token();
   #ring.locked{border-color:var(--ok); box-shadow:0 0 40px rgba(63,214,140,.55);}
   #ring .dot{width:14px; height:14px; border-radius:50%; background:var(--accent);}
   #ring.locked .dot{background:var(--ok);}
+  /* шкала фиксации: кольцо-прогресс «держите» (как заполняющийся круг у Matterport) */
+  #ring .fill{position:absolute; inset:4px; border-radius:50%; opacity:.6; background:transparent;
+    -webkit-mask:radial-gradient(transparent 45%, #000 46%); mask:radial-gradient(transparent 45%, #000 46%);}
   #arrows{position:absolute; left:50%; top:45%; transform:translate(-50%,-50%); width:260px; height:260px;}
   .arrow{position:absolute; font-size:44px; font-weight:900; color:var(--accent);
     text-shadow:0 2px 8px rgba(0,0,0,.8); display:none;}
@@ -112,9 +115,10 @@ $token = csrf_token();
     <div class="card" style="margin-top:16px">
       <h2>Как снимать</h2>
       <p class="sub">1. Встань в центр комнаты и не сходи с места.<br>
-      2. Держи телефон вертикально, вращайся вокруг себя.<br>
-      3. Наводи кольцо на цель — снимок сделается сам.<br>
-      4. Всего 22 кадра: круг прямо, вверх и вниз.</p>
+      2. Держи телефон вертикально, поворачивайся к цели.<br>
+      3. Наведи кольцо и <b>замри</b> — кольцо начнёт заполняться, снимок сделается сам.<br>
+      4. Важно: снимай стоя на месте, без движения — так кадры резче.<br>
+      5. Всего 22 кадра: круг прямо, вверх и вниз.</p>
     </div>
 
     <div class="card">
@@ -150,7 +154,7 @@ $token = csrf_token();
       <span class="arrow" id="arrL">←</span><span class="arrow" id="arrR">→</span>
       <span class="arrow" id="arrU">↑</span><span class="arrow" id="arrD">↓</span>
     </div>
-    <div id="ring"><div class="dot"></div></div>
+    <div id="ring"><div class="fill" id="ringFill"></div><div class="dot"></div></div>
     <div id="capHint">Поворачивайтесь к цели</div>
     <div id="capBottom">
       <button class="btn secondary" id="btnFinishCap" disabled>Завершить</button>
@@ -268,8 +272,10 @@ $token = csrf_token();
     try{ if (navigator.wakeLock) state.wakeLock = await navigator.wakeLock.request('screen'); }catch(e){}
 
     state.currentRoom = { shots: [], targets: null };
-    state.capturing = true; state.lockStart = 0;
+    state.capturing = true;
+    state.prevCur = null; state.prevT = 0; state.angSpeed = 999; state.holdMs = 0; state.lastLoop = 0;
     $('capProgress').textContent = '0 / 22'; $('btnFinishCap').disabled = true;
+    $('ringFill').style.background = 'transparent';
     show('capture'); requestAnimationFrame(captureLoop);
   }
 
@@ -291,6 +297,12 @@ $token = csrf_token();
     return window.innerWidth > window.innerHeight;
   }
 
+  // Пороги «замри и держи»
+  const STILL_DPS = 6;    // телефон считается неподвижным ниже этой угловой скорости (°/сек)
+  const ALIGN_YAW = 6;    // допуск наведения по горизонтали, °
+  const ALIGN_PITCH = 5;  // по вертикали, °
+  const HOLD_MS = 600;    // сколько держать (неподвижно + наведено) до снимка
+
   function captureLoop(){
     if (!state.capturing) return;
     requestAnimationFrame(captureLoop);
@@ -298,8 +310,23 @@ $token = csrf_token();
     if (isLandscape()) return;
     if (!state.orient){ $('capHint').textContent='Ожидаю данные гироскопа…'; return; }
 
+    const now = performance.now();
+    const frameDt = state.lastLoop ? (now - state.lastLoop) : 16;
+    state.lastLoop = now;
+
     const R = rotMat(state.orient.alpha, state.orient.beta, state.orient.gamma);
     const cur = dirToYawPitch(camDir(R));
+
+    // Угловая скорость: насколько быстро крутится телефон (для проверки неподвижности)
+    if (state.prevCur){
+      const dt = Math.max(1, now - state.prevT);
+      const vy = angDiff(cur.yaw, state.prevCur.yaw) * R2D;
+      const vp = (cur.pitch - state.prevCur.pitch) * R2D;
+      const inst = Math.hypot(vy, vp) / (dt / 1000);
+      state.angSpeed = state.angSpeed * 0.6 + inst * 0.4;   // сглаживание
+    }
+    state.prevCur = cur; state.prevT = now;
+
     const room = state.currentRoom;
     if (!room.targets) room.targets = makeTargets(cur.yaw);
 
@@ -316,23 +343,37 @@ $token = csrf_token();
       if(d<bestD){bestD=d; best=t;}
     });
     const dy = angDiff(best.yaw, cur.yaw)*R2D, dp = (best.pitch - cur.pitch)*R2D;
-    $('arrL').classList.toggle('show', dy < -6);
-    $('arrR').classList.toggle('show', dy >  6);
-    $('arrU').classList.toggle('show', dp >  5);
-    $('arrD').classList.toggle('show', dp < -5);
+    $('arrL').classList.toggle('show', dy < -ALIGN_YAW);
+    $('arrR').classList.toggle('show', dy >  ALIGN_YAW);
+    $('arrU').classList.toggle('show', dp >  ALIGN_PITCH);
+    $('arrD').classList.toggle('show', dp < -ALIGN_PITCH);
 
-    const aligned = Math.abs(dy)<=7 && Math.abs(dp)<=6;
-    $('ring').classList.toggle('locked', aligned);
-    if (aligned){
-      if (!state.lockStart) state.lockStart = performance.now();
-      $('capHint').textContent = 'Держите ровно…';
-      if (performance.now() - state.lockStart > 550){ snap(false, best, R); state.lockStart = 0; }
+    const aligned = Math.abs(dy) <= ALIGN_YAW && Math.abs(dp) <= ALIGN_PITCH;
+    const still = state.angSpeed < STILL_DPS;
+    $('ring').classList.toggle('locked', aligned && still);
+
+    if (aligned && still){
+      // копим время удержания и рисуем заполняющееся кольцо
+      state.holdMs += frameDt;
+      const pct = Math.min(1, state.holdMs / HOLD_MS);
+      $('ringFill').style.background = 'conic-gradient(var(--ok) ' + (pct*360).toFixed(0) + 'deg, transparent 0deg)';
+      $('capHint').textContent = 'Держите… ' + Math.round(pct*100) + '%';
+      if (state.holdMs >= HOLD_MS){
+        snap(false, best, R);
+        state.holdMs = 0;
+        $('ringFill').style.background = 'transparent';
+      }
     } else {
-      state.lockStart = 0;
-      const parts=[];
-      if (Math.abs(dy)>6) parts.push((dy>0?'вправо ':'влево ') + Math.round(Math.abs(dy)) + '°');
-      if (Math.abs(dp)>5) parts.push((dp>0?'выше ':'ниже ') + Math.round(Math.abs(dp)) + '°');
-      $('capHint').textContent = parts.join(', ') || 'Наведите кольцо на цель';
+      state.holdMs = 0;
+      $('ringFill').style.background = 'transparent';
+      if (aligned && !still){
+        $('capHint').textContent = 'Замрите — снимок сделается, когда телефон остановится';
+      } else {
+        const parts=[];
+        if (Math.abs(dy) > ALIGN_YAW) parts.push((dy>0?'вправо ':'влево ') + Math.round(Math.abs(dy)) + '°');
+        if (Math.abs(dp) > ALIGN_PITCH) parts.push((dp>0?'выше ':'ниже ') + Math.round(Math.abs(dp)) + '°');
+        $('capHint').textContent = parts.join(', ') || 'Наведите кольцо на цель';
+      }
     }
   }
 
@@ -352,7 +393,10 @@ $token = csrf_token();
     if (target) target.done = true;
     const v = $('video');
     if (!v.videoWidth) return;
-    const scale = Math.min(1, 1100 / Math.max(v.videoWidth, v.videoHeight));
+    // Кадру достаточно ~(доля FOV в панораме)×запас; не тянем полный сенсор ради памяти.
+    const need = state.panoW * (state.hfovDeg / 360) * 2.4;
+    const cap = Math.max(1000, Math.min(1600, need));
+    const scale = Math.min(1, cap / Math.max(v.videoWidth, v.videoHeight));
     const c = document.createElement('canvas');
     c.width  = Math.round(v.videoWidth * scale);
     c.height = Math.round(v.videoHeight * scale);
