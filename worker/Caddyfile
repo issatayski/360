@@ -1,0 +1,4 @@
+# Caddy: авто-TLS для поддомена воркера, проксирование на gunicorn.
+{$WORKER_DOMAIN} {
+    reverse_proxy worker:8080
+}

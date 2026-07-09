@@ -1,0 +1,35 @@
+# Развёртывание воркера на VPS с авто-HTTPS (Caddy).
+# 1. Заведи поддомен (напр. stitch.sifro.kz) → A-запись на IP VPS.
+# 2. Скопируй сюда .env (см. .env.example): WORKER_DOMAIN, WORKER_TOKEN.
+# 3. docker compose up -d --build
+# Caddy сам получит TLS-сертификат Let's Encrypt (нужны открытые порты 80 и 443).
+
+services:
+  worker:
+    build: .
+    environment:
+      - WORKER_TOKEN=${WORKER_TOKEN}
+      - MAX_WIDTH=${MAX_WIDTH:-4096}       # на VPS можно 4096
+      - STITCH_BLEND=${STITCH_BLEND:-multiband}
+    restart: unless-stopped
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - WORKER_DOMAIN=${WORKER_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - worker
+
+volumes:
+  caddy_data:
+  caddy_config:

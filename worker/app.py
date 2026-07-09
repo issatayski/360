@@ -30,6 +30,8 @@ app = Flask(__name__)
 # На бесплатном Render (0.1 CPU / 512 МБ) большие панорамы дают OOM/долго.
 # По умолчанию режем до 2048; на мощном инстансе подними env MAX_WIDTH=4096.
 MAX_WIDTH = int(os.environ.get("MAX_WIDTH", "2048"))
+# режим блендинга по умолчанию: sharp (лёгкий, free-tier) или multiband (VPS)
+DEFAULT_BLEND = os.environ.get("STITCH_BLEND", "sharp")
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
 
 
@@ -102,7 +104,7 @@ def stitch_endpoint():
     hfov = float(man.get("hfov", 50))
     width = int(man.get("width", 4096))
     width = max(1024, min(MAX_WIDTH, width - (width % 2)))
-    blend = man.get("blend", "sharp")   # мягкое перо: непрерывно (лучший из «плохих» на free-tier)
+    blend = man.get("blend", DEFAULT_BLEND)
 
     imgs, Rs = [], []
     for fr in frames:

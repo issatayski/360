@@ -30,10 +30,29 @@ python app.py            # слушает :8080
 gunicorn -b 0.0.0.0:8080 -w 1 -t 180 app:app
 ```
 
+## Деплой на VPS (рекомендуется для качества)
+
+Бесплатный Render (0.1 CPU / 512 МБ) вынуждает резать до 2048 и лёгкий блендинг.
+Нормальный VPS (2 ядра / 2–4 ГБ, ~$4–6/мес) снимает это: **4096 + multi-band
+блендинг** (прячет и швы, и призраки), быстро, без «засыпания».
+
+Готовый `docker-compose.yml` поднимает воркер + **Caddy с авто-HTTPS** (телефон
+обращается к воркеру напрямую, а сайт на https → воркеру нужен https).
+
+Шаги:
+1. Заведи поддомен, напр. `stitch.sifro.kz` → A-запись на IP VPS. Открой порты 80/443.
+2. На VPS: установи Docker, склонируй репозиторий, зайди в `worker/`.
+3. `cp .env.example .env` и заполни: `WORKER_DOMAIN`, `WORKER_TOKEN` (тот же, что в
+   `lib/config.php`), `MAX_WIDTH=4096`, `STITCH_BLEND=multiband`.
+4. `docker compose up -d --build` — Caddy сам получит TLS-сертификат.
+5. Проверь `https://stitch.sifro.kz/health` → `{"ok":true}`.
+6. На сайте в `lib/config.php`: `WORKER_URL = 'https://stitch.sifro.kz'`.
+
 ## Переменные окружения
-- `WORKER_TOKEN` — общий секрет; PHP шлёт его в заголовке `X-Worker-Token`. Задай
-  одинаковым тут и в `lib/config.php` сайта.
-- `MAX_WIDTH` — потолок ширины панорамы (по умолчанию 4096).
+- `WORKER_TOKEN` — общий секрет; PHP шлёт его в заголовке `X-Worker-Token` или в
+  подписи билета. Задай одинаковым тут и в `lib/config.php` сайта.
+- `MAX_WIDTH` — потолок ширины панорамы (free-tier 2048; VPS 4096).
+- `STITCH_BLEND` — `sharp` (лёгкий) или `multiband` (VPS, лучшее качество).
 - `PORT` — порт (по умолчанию 8080).
 
 ## Контракт API

@@ -164,6 +164,53 @@ def reproject_R(img, R, hfov_deg, world):
     return sampled.astype(np.float32), w, inside
 
 
+def reproject_weight(shape, R, hfov_deg, world):
+    """Только карта веса + маска покрытия кадра (без сэмплинга цвета) — для выбора
+    кадра-победителя на каждый пиксель (дёшево, без remap)."""
+    Hf, Wf = shape
+    f = focal(hfov_deg, Wf)
+    cw, ch = Wf / 2.0, Hf / 2.0
+    cam = world @ R
+    cz = cam[..., 2]
+    valid = cz < -1e-6
+    czs = np.where(valid, cz, -1.0)
+    t = -1.0 / czs
+    ix = cw + f * cam[..., 0] * t
+    iy = ch - f * cam[..., 1] * t
+    inside = valid & (ix >= 0) & (ix <= Wf - 1) & (iy >= 0) & (iy <= Hf - 1)
+    wx = np.clip(1 - np.abs(ix - cw) / cw, 0, 1)
+    wy = np.clip(1 - np.abs(iy - ch) / ch, 0, 1)
+    return ((wx * wy) * inside).astype(np.float32), inside
+
+
+def blend_multiband(imgs, Rs, hfov_deg, world, gains, num_bands=5):
+    """Профи-блендинг: каждый пиксель берётся из ОДНОГО кадра-победителя (нет
+    двоения), а стыки сглаживаются многополосно (нет швов). Тяжелее по памяти —
+    для VPS. Возвращает (uint8 HxWx3, coverage)."""
+    H, W = world.shape[:2]
+    # проход 1: кто «побеждает» на каждом пикселе (по перьевому весу)
+    best_w = np.full((H, W), -1.0, np.float32)
+    best_idx = np.full((H, W), -1, np.int32)
+    for idx, R in enumerate(Rs):
+        w, _inside = reproject_weight(imgs[idx].shape[:2], R, hfov_deg, world)
+        take = w > best_w
+        best_w[take] = w[take]; best_idx[take] = idx
+
+    # проход 2: скармливаем блендеру цвет + маску-шов (жёсткое разбиение по победителю)
+    nb = int(max(1, min(num_bands, np.floor(np.log2(min(H, W))))))
+    blender = cv2.detail_MultiBandBlender(0, nb)
+    blender.prepare((0, 0, W, H))
+    for idx, (img, R) in enumerate(zip(imgs, Rs)):
+        sampled, w, inside = reproject_R(img, R, hfov_deg, world)
+        if gains is not None:
+            sampled = np.clip(sampled * gains[idx], 0, 255)
+        mask = ((best_idx == idx) & inside).astype(np.uint8) * 255
+        blender.feed(np.ascontiguousarray(sampled.astype(np.int16)), mask, (0, 0))
+    res, res_mask = blender.blend(None, None)
+    out = np.clip(res, 0, 255).astype(np.uint8)
+    return out, float((res_mask > 0).mean())
+
+
 def compute_gains(imgs, Rs, hfov_deg, gain_width=1024):
     world = equirect_world(gain_width)
     grays, masks = [], []
@@ -211,6 +258,14 @@ def stitch(imgs, Rs_init, hfov_deg, width=4096, blend="best", power=4.0,
     H, W = width // 2, width
     gains = compute_gains(imgs, Rs, hfov_deg) if expcomp else None
     print(f"[stitch] reprojecting {len(imgs)} frames @ {W}x{H} (blend={blend})", flush=True)
+
+    if blend == "multiband":
+        try:
+            out, cov = blend_multiband(imgs, Rs, hfov_deg, world, gains)
+            return out, cov, refined
+        except Exception as e:
+            print("multiband failed, fallback to sharp:", e, flush=True)
+            blend = "sharp"
 
     if blend == "best":
         best_w = np.zeros((H, W), np.float32)
