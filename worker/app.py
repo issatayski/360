@@ -102,7 +102,7 @@ def stitch_endpoint():
     hfov = float(man.get("hfov", 50))
     width = int(man.get("width", 4096))
     width = max(1024, min(MAX_WIDTH, width - (width % 2)))
-    blend = man.get("blend", "sharp")
+    blend = man.get("blend", "best")   # winner-take-all: без двоения
 
     imgs, Rs = [], []
     for fr in frames:

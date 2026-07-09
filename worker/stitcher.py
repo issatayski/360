@@ -193,9 +193,15 @@ def compute_gains(imgs, Rs, hfov_deg, gain_width=1024):
     return np.clip(np.exp(l), 0.5, 2.0)
 
 
-def stitch(imgs, Rs_init, hfov_deg, width=4096, blend="sharp", power=4.0,
+def stitch(imgs, Rs_init, hfov_deg, width=4096, blend="best", power=4.0,
            expcomp=True, refine=True):
-    """imgs — список BGR; Rs_init — список 3x3 матриц (гиро-позы, конвенция projectShot)."""
+    """imgs — список BGR; Rs_init — список 3x3 матриц (гиро-позы, конвенция projectShot).
+
+    blend: 'best'  — каждый пиксель из ОДНОГО кадра с макс. весом (нет усреднения →
+                     нет двоения; возможны швы, их гасит expcomp);
+           'sharp' — усреднение со степенным пером (мягче, но двоит при рассинхроне);
+           'linear'— простое усреднение.
+    """
     refined = False
     Rs = Rs_init
     if refine:
@@ -204,20 +210,32 @@ def stitch(imgs, Rs_init, hfov_deg, width=4096, blend="sharp", power=4.0,
     world = equirect_world(width)
     H, W = width // 2, width
     gains = compute_gains(imgs, Rs, hfov_deg) if expcomp else None
-    print(f"[stitch] reprojecting {len(imgs)} frames @ {W}x{H}", flush=True)
+    print(f"[stitch] reprojecting {len(imgs)} frames @ {W}x{H} (blend={blend})", flush=True)
 
-    accum = np.zeros((H, W, 3), np.float32)
-    wsum = np.zeros((H, W), np.float32)
-    for idx, (img, R) in enumerate(zip(imgs, Rs)):
-        sampled, w, inside = reproject_R(img, R, hfov_deg, world)
-        if gains is not None:
-            sampled = np.clip(sampled * gains[idx], 0, 255)
-        if blend == "sharp":
-            w = np.power(w, power) * inside
-        accum += sampled * w[..., None]
-        wsum += w
+    if blend == "best":
+        best_w = np.zeros((H, W), np.float32)
+        out = np.zeros((H, W, 3), np.float32)
+        for idx, (img, R) in enumerate(zip(imgs, Rs)):
+            sampled, w, inside = reproject_R(img, R, hfov_deg, world)
+            if gains is not None:
+                sampled = np.clip(sampled * gains[idx], 0, 255)
+            take = w > best_w
+            out[take] = sampled[take]
+            best_w[take] = w[take]
+        covered = best_w > 1e-6
+    else:
+        accum = np.zeros((H, W, 3), np.float32)
+        wsum = np.zeros((H, W), np.float32)
+        for idx, (img, R) in enumerate(zip(imgs, Rs)):
+            sampled, w, inside = reproject_R(img, R, hfov_deg, world)
+            if gains is not None:
+                sampled = np.clip(sampled * gains[idx], 0, 255)
+            if blend == "sharp":
+                w = np.power(w, power) * inside
+            accum += sampled * w[..., None]
+            wsum += w
+        covered = wsum > 1e-6
+        out = np.zeros((H, W, 3), np.float32)
+        out[covered] = accum[covered] / wsum[covered, None]
 
-    covered = wsum > 1e-6
-    out = np.zeros((H, W, 3), np.float32)
-    out[covered] = accum[covered] / wsum[covered, None]
     return np.clip(out, 0, 255).astype(np.uint8), float(covered.mean()), refined
