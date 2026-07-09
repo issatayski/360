@@ -311,10 +311,11 @@ $token = csrf_token();
   }
 
   // Пороги «замри и держи»
-  const STILL_DPS = 6;    // телефон считается неподвижным ниже этой угловой скорости (°/сек)
+  const STILL_DPS = 3.5;  // телефон считается неподвижным ниже этой угловой скорости (°/сек) — строго
   const ALIGN_YAW = 5;    // допуск наведения по горизонтали, ° (точки в кольцо)
   const ALIGN_PITCH = 4;  // по вертикали, °
-  const HOLD_MS = 600;    // сколько держать (неподвижно + наведено) до снимка
+  const HOLD_MS = 900;    // держать неподвижно после наведения до снимка (даём телефону «устояться»)
+  const SETTLE_MS = 250;  // сперва замереть на это время, и только потом начинает копиться удержание
 
   function captureLoop(){
     if (!state.capturing) return;
@@ -390,21 +391,28 @@ $token = csrf_token();
     $('ring').classList.toggle('locked', aligned && still);
 
     if (aligned && still){
-      // копим время удержания и рисуем заполняющееся кольцо
+      // копим общее время неподвижности: сперва фаза «устояться», потом заполнение кольца
       state.holdMs += frameDt;
-      const pct = Math.min(1, state.holdMs / HOLD_MS);
-      $('ringFill').style.background = 'conic-gradient(var(--ok) ' + (pct*360).toFixed(0) + 'deg, transparent 0deg)';
-      $('capHint').textContent = 'Держите… ' + Math.round(pct*100) + '%';
-      if (state.holdMs >= HOLD_MS){
-        snap(false, best, R);
-        state.holdMs = 0;
+      if (state.holdMs < SETTLE_MS){
+        // ещё устаканиваемся — прогресс не идёт
         $('ringFill').style.background = 'transparent';
+        $('capHint').textContent = 'Замрите…';
+      } else {
+        const held = state.holdMs - SETTLE_MS;
+        const pct = Math.min(1, held / HOLD_MS);
+        $('ringFill').style.background = 'conic-gradient(var(--ok) ' + (pct*360).toFixed(0) + 'deg, transparent 0deg)';
+        $('capHint').textContent = 'Держите… ' + Math.round(pct*100) + '%';
+        if (held >= HOLD_MS){
+          snap(false, best, R);
+          state.holdMs = 0;
+          $('ringFill').style.background = 'transparent';
+        }
       }
     } else {
-      state.holdMs = 0;
+      state.holdMs = 0;   // любое движение или сбитое наведение — сброс, начинаем заново
       $('ringFill').style.background = 'transparent';
       if (aligned && !still){
-        $('capHint').textContent = 'Замрите — снимок сделается, когда телефон остановится';
+        $('capHint').textContent = 'Почти! Остановитесь и не двигайтесь';
       } else {
         const parts=[];
         if (Math.abs(dy) > ALIGN_YAW) parts.push((dy>0?'вправо ':'влево ') + Math.round(Math.abs(dy)) + '°');
