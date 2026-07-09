@@ -45,7 +45,7 @@ def cam_forward_world(R):
     return np.array([0.0, 0.0, -1.0]) @ R.T
 
 
-def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=6.0):
+def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=2.0):
     n = len(imgs)
     if n < 2:
         return Rs_init, False
@@ -106,7 +106,12 @@ def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=6.0):
     try:
         sol = least_squares(residuals, rv0.ravel(), method="lm", max_nfev=100)
         rv = sol.x.reshape(n, 3)
-        print("[refine] bundle adjust ok", flush=True)
+        # насколько выравнивание повернуло кадры относительно гиро-поз (диагностика)
+        deltas = []
+        for k in range(n):
+            rel = Rotation.from_rotvec(rv[k]).as_matrix() @ Rotation.from_rotvec(rv0[k]).as_matrix().T
+            deltas.append(np.degrees(np.linalg.norm(Rotation.from_matrix(rel).as_rotvec())))
+        print(f"[refine] ok. correction avg {np.mean(deltas):.2f} deg, max {np.max(deltas):.2f} deg", flush=True)
         return [Rotation.from_rotvec(rv[k]).as_matrix() for k in range(n)], True
     except Exception as e:
         print("refine_poses fallback:", e, flush=True)
