@@ -10,6 +10,11 @@
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/actions.php';
 
+// Склейка на воркере долгая (холодный старт Render + обработка). Не даём PHP
+// убить запрос раньше, чем ответит воркер, и не рвём при закрытии вкладки.
+@set_time_limit(300);
+@ignore_user_abort(true);
+
 $user = current_user();
 if (!$user) json_out(['ok' => false, 'error' => 'Не авторизован'], 401);
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') json_out(['ok' => false, 'error' => 'Только POST'], 405);

@@ -23,7 +23,9 @@ import stitcher
 
 app = Flask(__name__)
 
-MAX_WIDTH = int(os.environ.get("MAX_WIDTH", "4096"))
+# На бесплатном Render (0.1 CPU / 512 МБ) большие панорамы дают OOM/долго.
+# По умолчанию режем до 2048; на мощном инстансе подними env MAX_WIDTH=4096.
+MAX_WIDTH = int(os.environ.get("MAX_WIDTH", "2048"))
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
 
 
