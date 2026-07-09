@@ -1,0 +1,184 @@
+"""stitcher.py — серверная склейка кадров в equirect с выравниванием по признакам.
+
+Гиро-позы (матрица вращения R на кадр) — стартовая оценка. Уточняем повороты по
+совпадениям ORB-признаков между соседними кадрами (bundle adjustment над
+вращениями, с якорем к гиро-позам) → убираем рассинхрон угла (главную причину
+мыла/двоения). При нехватке совпадений кадр остаётся на гиро-позе.
+
+Конвенция координат — как в capture.php::projectShot (проверенная на устройстве):
+  мир: z — вверх; луч d = [cos(lat)sin(lon), cos(lat)cos(lon), sin(lat)];
+  камера смотрит вдоль −Z; cam = world @ R; world = cam @ R.T.
+  Проекция: f=(Wf/2)/tan(hfov/2); t=-1/cz; ix=cw+f*cx*t; iy=ch-f*cy*t.
+"""
+import numpy as np
+import cv2
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+
+
+def equirect_world(width):
+    H, W = width // 2, width
+    j = np.arange(W); i = np.arange(H)
+    lon = ((j + 0.5) / W) * 2 * np.pi - np.pi
+    lat = np.pi / 2 - ((i + 0.5) / H) * np.pi
+    LON, LAT = np.meshgrid(lon, lat)
+    c = np.cos(LAT)
+    return np.stack([c * np.sin(LON), c * np.cos(LON), np.sin(LAT)], axis=-1).astype(np.float32)
+
+
+def pixels_to_cam_rays(pts, Wf, Hf, f):
+    """Пиксели (N,2) → единичные лучи камеры (N,3), обратно к проекции projectShot."""
+    cw, ch = Wf / 2.0, Hf / 2.0
+    a = (pts[:, 0] - cw) / f
+    b = (ch - pts[:, 1]) / f
+    rays = np.stack([a, b, -np.ones_like(a)], axis=1)
+    rays /= np.linalg.norm(rays, axis=1, keepdims=True)
+    return rays
+
+
+def focal(hfov_deg, Wf):
+    return (Wf / 2.0) / np.tan(np.deg2rad(hfov_deg) / 2.0)
+
+
+def cam_forward_world(R):
+    """Направление взгляда камеры в мире (для отбора перекрывающихся пар)."""
+    return np.array([0.0, 0.0, -1.0]) @ R.T
+
+
+def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=6.0):
+    n = len(imgs)
+    if n < 2:
+        return Rs_init, False
+
+    orb = cv2.ORB_create(nfeatures=1500)
+    kps, descs, shapes = [], [], []
+    for img in imgs:
+        g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        k, d = orb.detectAndCompute(g, None)
+        kps.append(k); descs.append(d); shapes.append(img.shape[:2])
+
+    fwd = [cam_forward_world(R) for R in Rs_init]
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    cos_thr = np.cos(np.deg2rad(hfov_deg * 1.1))
+
+    pairs = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            if descs[i] is None or descs[j] is None:
+                continue
+            if float(np.dot(fwd[i], fwd[j])) < cos_thr:
+                continue
+            raw = bf.knnMatch(descs[i], descs[j], k=2)
+            good = [m for m, nn in (p for p in raw if len(p) == 2) if m.distance < 0.75 * nn.distance]
+            if len(good) < 15:
+                continue
+            Hi, Wi = shapes[i]; Hj, Wj = shapes[j]
+            fi, fj = focal(hfov_deg, Wi), focal(hfov_deg, Wj)
+            pi = np.float32([kps[i][m.queryIdx].pt for m in good])
+            pj = np.float32([kps[j][m.trainIdx].pt for m in good])
+            ri = pixels_to_cam_rays(pi, Wi, Hi, fi)
+            rj = pixels_to_cam_rays(pj, Wj, Hj, fj)
+            pairs.append((i, j, ri, rj))
+
+    if not pairs:
+        return Rs_init, False
+
+    rv0 = np.array([Rotation.from_matrix(R).as_rotvec() for R in Rs_init])
+
+    def residuals(x):
+        rv = x.reshape(n, 3)
+        Rs = [Rotation.from_rotvec(rv[k]).as_matrix() for k in range(n)]
+        res = []
+        for (i, j, ri, rj) in pairs:
+            wi = ri @ Rs[i].T
+            wj = rj @ Rs[j].T
+            res.append((wi - wj).ravel())
+        res.append((prior_weight * (rv - rv0)).ravel())
+        return np.concatenate(res)
+
+    try:
+        sol = least_squares(residuals, rv0.ravel(), method="lm", max_nfev=200)
+        rv = sol.x.reshape(n, 3)
+        return [Rotation.from_rotvec(rv[k]).as_matrix() for k in range(n)], True
+    except Exception as e:
+        print("refine_poses fallback:", e)
+        return Rs_init, False
+
+
+def reproject_R(img, R, hfov_deg, world):
+    Hf, Wf = img.shape[:2]
+    f = focal(hfov_deg, Wf)
+    cw, ch = Wf / 2.0, Hf / 2.0
+    cam = world @ R                      # (H,W,3)
+    cz = cam[..., 2]
+    valid = cz < -1e-6
+    czs = np.where(valid, cz, -1.0)
+    t = -1.0 / czs
+    ix = cw + f * cam[..., 0] * t
+    iy = ch - f * cam[..., 1] * t
+    inside = valid & (ix >= 0) & (ix <= Wf - 1) & (iy >= 0) & (iy <= Hf - 1)
+    map_x = np.where(inside, ix, -1).astype(np.float32)
+    map_y = np.where(inside, iy, -1).astype(np.float32)
+    sampled = cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+    wx = np.clip(1 - np.abs(ix - cw) / cw, 0, 1)
+    wy = np.clip(1 - np.abs(iy - ch) / ch, 0, 1)
+    w = ((wx * wy) * inside).astype(np.float32)
+    return sampled.astype(np.float32), w, inside
+
+
+def compute_gains(imgs, Rs, hfov_deg, gain_width=1024):
+    world = equirect_world(gain_width)
+    grays, masks = [], []
+    for img, R in zip(imgs, Rs):
+        s, _w, inside = reproject_R(img, R, hfov_deg, world)
+        grays.append(s.mean(axis=2)); masks.append(inside)
+    n = len(imgs)
+    A = np.zeros((n, n)); b = np.zeros(n)
+    for i in range(n):
+        for j in range(i + 1, n):
+            ov = masks[i] & masks[j]
+            N = int(ov.sum())
+            if N < 50:
+                continue
+            Ii = float(grays[i][ov].mean()); Ij = float(grays[j][ov].mean())
+            if Ii < 1 or Ij < 1:
+                continue
+            d = np.log(Ij) - np.log(Ii)
+            A[i, i] += N; A[j, j] += N; A[i, j] -= N; A[j, i] -= N
+            b[i] += N * d; b[j] -= N * d
+    A += np.eye(n) * 1e-3
+    try:
+        l = np.linalg.solve(A, b)
+    except np.linalg.LinAlgError:
+        l = np.zeros(n)
+    l -= l.mean()
+    return np.clip(np.exp(l), 0.5, 2.0)
+
+
+def stitch(imgs, Rs_init, hfov_deg, width=4096, blend="sharp", power=4.0,
+           expcomp=True, refine=True):
+    """imgs — список BGR; Rs_init — список 3x3 матриц (гиро-позы, конвенция projectShot)."""
+    refined = False
+    Rs = Rs_init
+    if refine:
+        Rs, refined = refine_poses(imgs, Rs_init, hfov_deg)
+
+    world = equirect_world(width)
+    H, W = width // 2, width
+    gains = compute_gains(imgs, Rs, hfov_deg) if expcomp else None
+
+    accum = np.zeros((H, W, 3), np.float32)
+    wsum = np.zeros((H, W), np.float32)
+    for idx, (img, R) in enumerate(zip(imgs, Rs)):
+        sampled, w, inside = reproject_R(img, R, hfov_deg, world)
+        if gains is not None:
+            sampled = np.clip(sampled * gains[idx], 0, 255)
+        if blend == "sharp":
+            w = np.power(w, power) * inside
+        accum += sampled * w[..., None]
+        wsum += w
+
+    covered = wsum > 1e-6
+    out = np.zeros((H, W, 3), np.float32)
+    out[covered] = accum[covered] / wsum[covered, None]
+    return np.clip(out, 0, 255).astype(np.uint8), float(covered.mean()), refined
