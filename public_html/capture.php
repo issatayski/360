@@ -123,7 +123,7 @@ $token = csrf_token();
       2. На экране появятся <b>белые точки-цели</b>. Наведи на точку центральное кольцо.<br>
       3. Точка в кольце — <b>замри</b>: кольцо заполнится, снимок сделается сам.<br>
       4. Важно: снимай стоя, без движения в момент щелчка — так резче.<br>
-      5. Всего 22 точки: круг прямо, вверх и вниз.</p>
+      5. Точки идут по трём кольцам: круг прямо, вверх и вниз.</p>
     </div>
 
     <div class="card">
@@ -242,7 +242,7 @@ $token = csrf_token();
   // ---- цели: 3 кольца (горизонт 10, +55° 6, -55° 6) ----
   function makeTargets(yaw0){
     const t = [];
-    [{p:0,n:10},{p:55,n:6},{p:-55,n:6}].forEach(r=>{
+    [{p:0,n:8},{p:52,n:5},{p:-52,n:5}].forEach(r=>{
       for(let i=0;i<r.n;i++){
         let y = yaw0 + i*(2*Math.PI/r.n);
         while(y>Math.PI)y-=2*Math.PI; while(y<-Math.PI)y+=2*Math.PI;
@@ -286,7 +286,7 @@ $token = csrf_token();
     state.currentRoom = { shots: [], targets: null };
     state.capturing = true;
     state.prevCur = null; state.prevT = 0; state.angSpeed = 999; state.holdMs = 0; state.lastLoop = 0;
-    $('capProgress').textContent = '0 / 22'; $('btnFinishCap').disabled = true;
+    $('capProgress').textContent = '0'; $('btnFinishCap').disabled = true;
     $('ringFill').style.background = 'transparent';
     show('capture'); requestAnimationFrame(captureLoop);
   }
@@ -570,9 +570,9 @@ $token = csrf_token();
             if (ix<0 || iy<0 || ix>=iw-1 || iy>=ih-1) continue;
             const wx = 1 - Math.abs(ix-cw)/cw;
             const wy = 1 - Math.abs(iy-ch)/ch;
-            // жёсткий вес: ближайший к центру кадр доминирует → меньше двоения/мыла в перекрытии
+            // мягкое перо: плавный переход в перекрытии прячет швы (ценой лёгкой мягкости)
             const ww = wx*wy;
-            const w = ww*ww*ww*ww*ww*ww + 1e-6;
+            const w = ww*ww + 1e-4;
             const x0=ix|0, y0=iy|0, fx=ix-x0, fy=iy-y0;
             const i00=(y0*iw+x0)*4, i01=i00+4, i10=i00+iw*4, i11=i10+4;
             const w00=(1-fx)*(1-fy), w01=fx*(1-fy), w10=(1-fx)*fy, w11=fx*fy;
