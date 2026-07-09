@@ -119,9 +119,9 @@ def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=4.0, max_correction_deg=1
         return np.concatenate(res)
 
     try:
-        # trf + робастная потеря soft_l1 гасит оставшиеся выбросы
-        sol = least_squares(residuals, rv0.ravel(), method="trf", loss="soft_l1",
-                            f_scale=0.05, max_nfev=120)
+        # lm — быстрый (trf/soft_l1 не тянет 0.1 CPU free-Render). Выбросы уже
+        # отсеяны RANSAC-ом выше, так что робастная потеря не нужна.
+        sol = least_squares(residuals, rv0.ravel(), method="lm", max_nfev=80)
         rv = sol.x.reshape(n, 3)
         out, deltas = [], []
         for k in range(n):
