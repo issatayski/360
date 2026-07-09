@@ -56,8 +56,13 @@ $token = csrf_token();
   #videoWrap{position:absolute; inset:0;}
   #video{width:100%; height:100%; object-fit:cover;}
   #hud{position:absolute; inset:0; pointer-events:none;}
-  #ring{position:absolute; left:50%; top:45%; transform:translate(-50%,-50%); width:180px; height:180px;
-    border-radius:50%; border:6px solid var(--accent); transition:border-color .15s;
+  /* точки-цели (как красные точки Matterport): наводишь на них центральное кольцо */
+  .tdot{position:absolute; width:46px; height:46px; border-radius:50%; transform:translate(-50%,-50%);
+    border:3px solid rgba(255,255,255,.85); background:rgba(0,0,0,.15); box-shadow:0 0 10px rgba(0,0,0,.5);
+    display:none; pointer-events:none; z-index:2;}
+  .tdot.active{border-color:var(--accent); background:rgba(255,176,32,.18);}
+  #ring{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:180px; height:180px;
+    border-radius:50%; border:6px solid var(--accent); transition:border-color .15s; z-index:3;
     display:flex; align-items:center; justify-content:center;}
   #ring.locked{border-color:var(--ok); box-shadow:0 0 40px rgba(63,214,140,.55);}
   #ring .dot{width:14px; height:14px; border-radius:50%; background:var(--accent);}
@@ -65,7 +70,7 @@ $token = csrf_token();
   /* шкала фиксации: кольцо-прогресс «держите» (как заполняющийся круг у Matterport) */
   #ring .fill{position:absolute; inset:4px; border-radius:50%; opacity:.6; background:transparent;
     -webkit-mask:radial-gradient(transparent 45%, #000 46%); mask:radial-gradient(transparent 45%, #000 46%);}
-  #arrows{position:absolute; left:50%; top:45%; transform:translate(-50%,-50%); width:260px; height:260px;}
+  #arrows{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:260px; height:260px;}
   .arrow{position:absolute; font-size:44px; font-weight:900; color:var(--accent);
     text-shadow:0 2px 8px rgba(0,0,0,.8); display:none;}
   .arrow.show{display:block;}
@@ -115,10 +120,10 @@ $token = csrf_token();
     <div class="card" style="margin-top:16px">
       <h2>Как снимать</h2>
       <p class="sub">1. Встань в центр комнаты и не сходи с места.<br>
-      2. Держи телефон вертикально, поворачивайся к цели.<br>
-      3. Наведи кольцо и <b>замри</b> — кольцо начнёт заполняться, снимок сделается сам.<br>
-      4. Важно: снимай стоя на месте, без движения — так кадры резче.<br>
-      5. Всего 22 кадра: круг прямо, вверх и вниз.</p>
+      2. На экране появятся <b>белые точки-цели</b>. Наведи на точку центральное кольцо.<br>
+      3. Точка в кольце — <b>замри</b>: кольцо заполнится, снимок сделается сам.<br>
+      4. Важно: снимай стоя, без движения в момент щелчка — так резче.<br>
+      5. Всего 22 точки: круг прямо, вверх и вниз.</p>
     </div>
 
     <div class="card">
@@ -246,6 +251,12 @@ $token = csrf_token();
     });
     return t;
   }
+  function clearDots(){ Array.prototype.forEach.call(document.querySelectorAll('.tdot'), function(e){ e.remove(); }); }
+  function buildDots(targets){
+    clearDots();
+    const hud = $('hud');
+    targets.forEach(function(t){ const d = document.createElement('div'); d.className = 'tdot'; hud.appendChild(d); t.el = d; });
+  }
 
   // ---- съёмка ----
   $('btnNewRoom').addEventListener('click', startCapture);
@@ -271,6 +282,7 @@ $token = csrf_token();
     try{ await v.play(); }catch(e){}
     try{ if (navigator.wakeLock) state.wakeLock = await navigator.wakeLock.request('screen'); }catch(e){}
 
+    clearDots();
     state.currentRoom = { shots: [], targets: null };
     state.capturing = true;
     state.prevCur = null; state.prevT = 0; state.angSpeed = 999; state.holdMs = 0; state.lastLoop = 0;
@@ -282,6 +294,7 @@ $token = csrf_token();
   function stopCapture(finish){
     if (!state.capturing) return;
     state.capturing = false;
+    clearDots();
     if (state.stream){ state.stream.getTracks().forEach(t=>t.stop()); state.stream=null; }
     if (state.wakeLock){ state.wakeLock.release().catch(()=>{}); state.wakeLock=null; }
     const room = state.currentRoom;
@@ -299,8 +312,8 @@ $token = csrf_token();
 
   // Пороги «замри и держи»
   const STILL_DPS = 6;    // телефон считается неподвижным ниже этой угловой скорости (°/сек)
-  const ALIGN_YAW = 6;    // допуск наведения по горизонтали, °
-  const ALIGN_PITCH = 5;  // по вертикали, °
+  const ALIGN_YAW = 5;    // допуск наведения по горизонтали, ° (точки в кольцо)
+  const ALIGN_PITCH = 4;  // по вертикали, °
   const HOLD_MS = 600;    // сколько держать (неподвижно + наведено) до снимка
 
   function captureLoop(){
@@ -328,7 +341,7 @@ $token = csrf_token();
     state.prevCur = cur; state.prevT = now;
 
     const room = state.currentRoom;
-    if (!room.targets) room.targets = makeTargets(cur.yaw);
+    if (!room.targets){ room.targets = makeTargets(cur.yaw); buildDots(room.targets); }
 
     const pending = room.targets.filter(t=>!t.done);
     const done = room.targets.length - pending.length;
@@ -343,10 +356,34 @@ $token = csrf_token();
       if(d<bestD){bestD=d; best=t;}
     });
     const dy = angDiff(best.yaw, cur.yaw)*R2D, dp = (best.pitch - cur.pitch)*R2D;
-    $('arrL').classList.toggle('show', dy < -ALIGN_YAW);
-    $('arrR').classList.toggle('show', dy >  ALIGN_YAW);
-    $('arrU').classList.toggle('show', dp >  ALIGN_PITCH);
-    $('arrD').classList.toggle('show', dp < -ALIGN_PITCH);
+
+    // Приближённые углы обзора экрана (video cover) для расстановки точек-целей
+    const capEl = $('capture');
+    const sW = capEl.clientWidth || window.innerWidth, sH = capEl.clientHeight || window.innerHeight;
+    const SHFOV = state.hfovDeg, SVFOV = SHFOV * (sH / sW);
+
+    // Точки-цели на экране: наводишь на них центральное кольцо
+    room.targets.forEach(t=>{
+      if (!t.el) return;
+      if (t.done){ t.el.style.display = 'none'; return; }
+      const tdy = angDiff(t.yaw, cur.yaw) * R2D, tdp = (t.pitch - cur.pitch) * R2D;
+      const inV = Math.abs(tdy) <= SHFOV/2 && Math.abs(tdp) <= SVFOV/2;
+      if (inV){
+        t.el.style.display = 'block';
+        t.el.style.left = (50 + tdy/(SHFOV/2)*50) + '%';
+        t.el.style.top  = (50 - tdp/(SVFOV/2)*50) + '%';
+        t.el.classList.toggle('active', t === best);
+      } else {
+        t.el.style.display = 'none';
+      }
+    });
+
+    // Стрелка-указатель — только если ближайшая цель за кадром
+    const bestInView = Math.abs(dy) <= SHFOV/2 && Math.abs(dp) <= SVFOV/2;
+    $('arrL').classList.toggle('show', !bestInView && dy < 0);
+    $('arrR').classList.toggle('show', !bestInView && dy > 0);
+    $('arrU').classList.toggle('show', !bestInView && dp > 0);
+    $('arrD').classList.toggle('show', !bestInView && dp < 0);
 
     const aligned = Math.abs(dy) <= ALIGN_YAW && Math.abs(dp) <= ALIGN_PITCH;
     const still = state.angSpeed < STILL_DPS;
@@ -525,7 +562,9 @@ $token = csrf_token();
             if (ix<0 || iy<0 || ix>=iw-1 || iy>=ih-1) continue;
             const wx = 1 - Math.abs(ix-cw)/cw;
             const wy = 1 - Math.abs(iy-ch)/ch;
-            const w = wx*wy*wx*wy + 1e-4;
+            // жёсткий вес: ближайший к центру кадр доминирует → меньше двоения/мыла в перекрытии
+            const ww = wx*wy;
+            const w = ww*ww*ww*ww*ww*ww + 1e-6;
             const x0=ix|0, y0=iy|0, fx=ix-x0, fy=iy-y0;
             const i00=(y0*iw+x0)*4, i01=i00+4, i10=i00+iw*4, i11=i10+4;
             const w00=(1-fx)*(1-fy), w01=fx*(1-fy), w10=(1-fx)*fy, w11=fx*fy;
