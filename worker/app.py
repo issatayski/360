@@ -71,12 +71,17 @@ def stitch_endpoint():
         imgs.append(img)
         Rs.append(np.array(R, dtype=np.float64).reshape(3, 3))
 
+    import time, traceback
+    t0 = time.time()
+    print(f"[stitch] start: {len(imgs)} frames, width={width}, hfov={hfov}", flush=True)
     try:
         pano, coverage, refined = stitcher.stitch(
             imgs, Rs, hfov, width=width, blend=blend, expcomp=True, refine=True
         )
     except Exception as e:
+        traceback.print_exc()
         return jsonify(ok=False, error=f"stitch failed: {e}"), 500
+    print(f"[stitch] done in {time.time()-t0:.1f}s coverage={coverage:.2f} refined={refined}", flush=True)
 
     ok, enc = cv2.imencode(".jpg", pano, [cv2.IMWRITE_JPEG_QUALITY, 90])
     if not ok:

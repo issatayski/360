@@ -50,12 +50,18 @@ def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=6.0):
     if n < 2:
         return Rs_init, False
 
-    orb = cv2.ORB_create(nfeatures=1500)
+    orb = cv2.ORB_create(nfeatures=1200)
+    DET_MAX = 900  # признаки ищем на уменьшенных кадрах — быстрее, углы сохраняются
     kps, descs, shapes = [], [], []
     for img in imgs:
+        h, w = img.shape[:2]
+        s = min(1.0, DET_MAX / max(h, w))
         g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        if s < 1.0:
+            g = cv2.resize(g, (max(1, int(w * s)), max(1, int(h * s))), interpolation=cv2.INTER_AREA)
         k, d = orb.detectAndCompute(g, None)
-        kps.append(k); descs.append(d); shapes.append(img.shape[:2])
+        kps.append(k); descs.append(d); shapes.append(g.shape[:2])
+    print(f"[refine] ORB done on {n} frames", flush=True)
 
     fwd = [cam_forward_world(R) for R in Rs_init]
     bf = cv2.BFMatcher(cv2.NORM_HAMMING)
@@ -80,6 +86,7 @@ def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=6.0):
             rj = pixels_to_cam_rays(pj, Wj, Hj, fj)
             pairs.append((i, j, ri, rj))
 
+    print(f"[refine] {len(pairs)} overlapping pairs with matches", flush=True)
     if not pairs:
         return Rs_init, False
 
@@ -97,11 +104,12 @@ def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=6.0):
         return np.concatenate(res)
 
     try:
-        sol = least_squares(residuals, rv0.ravel(), method="lm", max_nfev=200)
+        sol = least_squares(residuals, rv0.ravel(), method="lm", max_nfev=100)
         rv = sol.x.reshape(n, 3)
+        print("[refine] bundle adjust ok", flush=True)
         return [Rotation.from_rotvec(rv[k]).as_matrix() for k in range(n)], True
     except Exception as e:
-        print("refine_poses fallback:", e)
+        print("refine_poses fallback:", e, flush=True)
         return Rs_init, False
 
 
@@ -166,6 +174,7 @@ def stitch(imgs, Rs_init, hfov_deg, width=4096, blend="sharp", power=4.0,
     world = equirect_world(width)
     H, W = width // 2, width
     gains = compute_gains(imgs, Rs, hfov_deg) if expcomp else None
+    print(f"[stitch] reprojecting {len(imgs)} frames @ {W}x{H}", flush=True)
 
     accum = np.zeros((H, W, 3), np.float32)
     wsum = np.zeros((H, W), np.float32)

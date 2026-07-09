@@ -12,5 +12,5 @@ COPY . .
 ENV PORT=8080
 EXPOSE 8080
 # shell-форма, чтобы развернулся $PORT (Render/Cloud Run задают порт сами).
-# 1 воркер, длинный таймаут — склейка тяжёлая; масштабируй по нагрузке.
-CMD gunicorn -b 0.0.0.0:${PORT} -w 1 -t 180 app:app
+# 1 воркер, длинный таймаут (склейка тяжёлая), логи запросов и ошибок в stdout.
+CMD gunicorn -b 0.0.0.0:${PORT} -w 1 -t 300 --access-logfile - --error-logfile - --log-level info app:app
