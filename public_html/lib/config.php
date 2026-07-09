@@ -29,6 +29,13 @@ const DB_SQLITE_PATH = __DIR__ . '/../data/app.sqlite';
 const SEED_EMAIL = 'agent@example.com';
 const SEED_PASSWORD = 'changeme';
 
+// ---- Облачная склейка (воркер OpenCV, см. /worker) -------------------------
+// URL внешнего воркера склейки (Render/Fly/Cloud Run/VPS). Пусто = облако выкл,
+// тогда телефон склеивает черновик сам.
+const WORKER_URL = '';                       // напр. 'https://tour-stitch.onrender.com'
+const WORKER_TOKEN = '';                      // общий секрет, тот же в env воркера
+const WORKER_TIMEOUT = 180;                   // сек на ответ воркера (склейка тяжёлая)
+
 // ---- Приложение ------------------------------------------------------------
 // Абсолютная папка с загрузками (панорамы). Должна быть доступна на запись.
 const UPLOAD_DIR = __DIR__ . '/../uploads';

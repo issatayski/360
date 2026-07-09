@@ -173,11 +173,15 @@ $token = csrf_token();
 <!-- ========== ЭКРАН СШИВКИ / СОХРАНЕНИЯ ========== -->
 <div class="screen" id="stitch">
   <div class="scroll">
-    <h1 id="stitchTitle">Сшиваю панораму…</h1>
+    <h1 id="stitchTitle">Обрабатываю…</h1>
     <p class="sub" style="margin-top:8px">Не закрывайте страницу.</p>
     <div class="barWrap"><div id="bar"></div></div>
     <div id="stitchPct">0%</div>
     <div class="err" id="stitchErr" style="display:none"></div>
+    <div id="stitchBtns" style="display:none; gap:10px; flex-wrap:wrap; justify-content:center; margin-top:16px">
+      <button class="btn" id="btnRetryCloud">Повторить</button>
+      <button class="btn secondary" id="btnLocalStitch">Собрать на телефоне (черновик)</button>
+    </div>
   </div>
 </div>
 
@@ -298,7 +302,7 @@ $token = csrf_token();
     if (state.stream){ state.stream.getTracks().forEach(t=>t.stop()); state.stream=null; }
     if (state.wakeLock){ state.wakeLock.release().catch(()=>{}); state.wakeLock=null; }
     const room = state.currentRoom;
-    if (finish && room && room.shots.length >= 8){ runStitch(room); }
+    if (finish && room && room.shots.length >= 8){ processRoom(room); }
     else {
       if (finish) alert('Слишком мало кадров для панорамы (нужно хотя бы 8).');
       state.currentRoom = null; show('start');
@@ -457,9 +461,66 @@ $token = csrf_token();
     $('bar').style.width = p + '%'; $('stitchPct').textContent = p + '%';
   }
 
+  // ---------- ОБЛАЧНАЯ склейка (основной путь): кадры → воркер → сцена ----------
+  function canvasToBlob(c){ return new Promise(function(res){ c.toBlob(res, 'image/jpeg', 0.9); }); }
+  function pad3(i){ return ('000' + i).slice(-3); }
+
+  async function processRoom(room){
+    show('stitch');
+    $('stitchBtns').style.display = 'none';
+    $('stitchErr').style.display = 'none';
+    $('stitchTitle').textContent = 'Отправляю кадры в облако…';
+    setProgress(0);
+    try {
+      await sendToCloud(room, function(f){ setProgress(f * 0.9); });
+    } catch (e) {
+      offerFallback(room, e.message || String(e));
+    }
+  }
+
+  async function sendToCloud(room, onProgress){
+    const fd = new FormData();
+    fd.append('csrf', CSRF);
+    fd.append('tour_id', String(TOUR_ID));
+    fd.append('title', ($('sceneName').value || '').slice(0, 60));
+    const frames = [];
+    for (let i = 0; i < room.shots.length; i++){
+      const name = 'f' + pad3(i);
+      const blob = await canvasToBlob(room.shots[i].canvas);
+      fd.append(name, blob, name + '.jpg');
+      frames.push({ name: name, R: room.shots[i].R });
+    }
+    fd.append('manifest', JSON.stringify({ hfov: state.hfovDeg, width: state.panoW, frames: frames }));
+
+    return new Promise(function(resolve, reject){
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', 'api/stitch_cloud.php');
+      xhr.timeout = 200000;
+      xhr.upload.onprogress = function(e){ if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+      xhr.upload.onload = function(){ $('stitchTitle').textContent = 'Обрабатываю на сервере…'; setProgress(0.95); };
+      xhr.onload = function(){
+        let j = null; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+        if (j && j.ok){ setProgress(1); window.location.href = j.redirect || ('tour_edit.php?id=' + TOUR_ID); resolve(); }
+        else { reject(new Error((j && j.error) || ('Ошибка сервера ' + xhr.status))); }
+      };
+      xhr.onerror = function(){ reject(new Error('Нет связи с сервером')); };
+      xhr.ontimeout = function(){ reject(new Error('Сервер обрабатывает слишком долго')); };
+      xhr.send(fd);
+    });
+  }
+
+  function offerFallback(room, msg){
+    $('stitchTitle').textContent = 'Не удалось собрать в облаке';
+    const el = $('stitchErr'); el.textContent = msg; el.style.display = 'block';
+    $('stitchBtns').style.display = 'flex';
+    $('btnRetryCloud').onclick = function(){ processRoom(room); };
+    $('btnLocalStitch').onclick = function(){ runStitch(room); };
+  }
+
+  // ---------- Черновая склейка НА ТЕЛЕФОНЕ (запасной путь) ----------
   async function runStitch(room){
-    show('stitch'); $('stitchErr').style.display='none';
-    $('stitchTitle').textContent = 'Сшиваю панораму…'; setProgress(0);
+    show('stitch'); $('stitchErr').style.display='none'; $('stitchBtns').style.display='none';
+    $('stitchTitle').textContent = 'Сшиваю на телефоне…'; setProgress(0);
     const W = state.panoW, H = W/2, hfov = state.hfovDeg * D2R;
 
     let acc, wgt;
