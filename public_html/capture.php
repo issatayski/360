@@ -246,7 +246,7 @@ $token = csrf_token();
   // ---- цели: 3 кольца (горизонт 10, +55° 6, -55° 6) ----
   function makeTargets(yaw0){
     const t = [];
-    [{p:0,n:8},{p:52,n:5},{p:-52,n:5}].forEach(r=>{
+    [{p:0,n:10},{p:50,n:6},{p:-50,n:6}].forEach(r=>{
       for(let i=0;i<r.n;i++){
         let y = yaw0 + i*(2*Math.PI/r.n);
         while(y>Math.PI)y-=2*Math.PI; while(y<-Math.PI)y+=2*Math.PI;

@@ -45,13 +45,16 @@ def cam_forward_world(R):
     return np.array([0.0, 0.0, -1.0]) @ R.T
 
 
-def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=2.0):
+def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=4.0, max_correction_deg=15.0):
+    """Устойчивое уточнение поз: ORB → RANSAC-отсев выбросов → робастный BA.
+    Гиро-позы — якорь; неправдоподобные коррекции (> max_correction) отбрасываются.
+    """
     n = len(imgs)
     if n < 2:
         return Rs_init, False
 
-    orb = cv2.ORB_create(nfeatures=1200)
-    DET_MAX = 900  # признаки ищем на уменьшенных кадрах — быстрее, углы сохраняются
+    orb = cv2.ORB_create(nfeatures=2000)
+    DET_MAX = 1100
     kps, descs, shapes = [], [], []
     for img in imgs:
         h, w = img.shape[:2]
@@ -65,9 +68,11 @@ def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=2.0):
 
     fwd = [cam_forward_world(R) for R in Rs_init]
     bf = cv2.BFMatcher(cv2.NORM_HAMMING)
-    cos_thr = np.cos(np.deg2rad(hfov_deg * 1.1))
+    # шире сеть, чтобы ловить и соседей между кольцами
+    cos_thr = np.cos(np.deg2rad(min(85.0, hfov_deg * 1.5)))
 
     pairs = []
+    total_inliers = 0
     for i in range(n):
         for j in range(i + 1, n):
             if descs[i] is None or descs[j] is None:
@@ -75,19 +80,29 @@ def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=2.0):
             if float(np.dot(fwd[i], fwd[j])) < cos_thr:
                 continue
             raw = bf.knnMatch(descs[i], descs[j], k=2)
-            good = [m for m, nn in (p for p in raw if len(p) == 2) if m.distance < 0.75 * nn.distance]
-            if len(good) < 15:
+            good = [m for m, nn in (p for p in raw if len(p) == 2) if m.distance < 0.8 * nn.distance]
+            if len(good) < 12:
                 continue
             Hi, Wi = shapes[i]; Hj, Wj = shapes[j]
-            fi, fj = focal(hfov_deg, Wi), focal(hfov_deg, Wj)
             pi = np.float32([kps[i][m.queryIdx].pt for m in good])
             pj = np.float32([kps[j][m.trainIdx].pt for m in good])
+            # RANSAC-отсев ложных совпадений (гомография — хорошая модель для поворота далёкой сцены)
+            Hmat, mask = cv2.findHomography(pi, pj, cv2.RANSAC, 3.0)
+            if mask is None:
+                continue
+            inl = mask.ravel().astype(bool)
+            if int(inl.sum()) < 10:
+                continue
+            pi, pj = pi[inl], pj[inl]
+            fi, fj = focal(hfov_deg, Wi), focal(hfov_deg, Wj)
             ri = pixels_to_cam_rays(pi, Wi, Hi, fi)
             rj = pixels_to_cam_rays(pj, Wj, Hj, fj)
             pairs.append((i, j, ri, rj))
+            total_inliers += int(inl.sum())
 
-    print(f"[refine] {len(pairs)} overlapping pairs with matches", flush=True)
-    if not pairs:
+    print(f"[refine] {len(pairs)} pairs, {total_inliers} inlier matches", flush=True)
+    if len(pairs) < 3:
+        print("[refine] too few pairs -> keep gyro poses", flush=True)
         return Rs_init, False
 
     rv0 = np.array([Rotation.from_matrix(R).as_rotvec() for R in Rs_init])
@@ -104,15 +119,25 @@ def refine_poses(imgs, Rs_init, hfov_deg, prior_weight=2.0):
         return np.concatenate(res)
 
     try:
-        sol = least_squares(residuals, rv0.ravel(), method="lm", max_nfev=100)
+        # trf + робастная потеря soft_l1 гасит оставшиеся выбросы
+        sol = least_squares(residuals, rv0.ravel(), method="trf", loss="soft_l1",
+                            f_scale=0.05, max_nfev=120)
         rv = sol.x.reshape(n, 3)
-        # насколько выравнивание повернуло кадры относительно гиро-поз (диагностика)
-        deltas = []
+        out, deltas = [], []
         for k in range(n):
-            rel = Rotation.from_rotvec(rv[k]).as_matrix() @ Rotation.from_rotvec(rv0[k]).as_matrix().T
-            deltas.append(np.degrees(np.linalg.norm(Rotation.from_matrix(rel).as_rotvec())))
-        print(f"[refine] ok. correction avg {np.mean(deltas):.2f} deg, max {np.max(deltas):.2f} deg", flush=True)
-        return [Rotation.from_rotvec(rv[k]).as_matrix() for k in range(n)], True
+            Rk = Rotation.from_rotvec(rv[k]).as_matrix()
+            rel = Rk @ Rotation.from_rotvec(rv0[k]).as_matrix().T
+            ang = np.degrees(np.linalg.norm(Rotation.from_matrix(rel).as_rotvec()))
+            # защита: неправдоподобно большой сдвиг = спорная связь → оставить гиро
+            if ang > max_correction_deg:
+                out.append(Rs_init[k])
+            else:
+                out.append(Rk)
+                deltas.append(ang)
+        avg = float(np.mean(deltas)) if deltas else 0.0
+        mx = float(np.max(deltas)) if deltas else 0.0
+        print(f"[refine] ok. applied to {len(deltas)}/{n} frames, correction avg {avg:.2f} deg, max {mx:.2f} deg", flush=True)
+        return out, True
     except Exception as e:
         print("refine_poses fallback:", e, flush=True)
         return Rs_init, False
