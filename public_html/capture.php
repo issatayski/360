@@ -478,34 +478,14 @@ $token = csrf_token();
     }
   }
 
-  function postForm(url, fd, opts){
-    opts = opts || {};
-    return new Promise(function(resolve, reject){
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', url);
-      xhr.timeout = opts.timeout || 60000;
-      if (opts.responseType) xhr.responseType = opts.responseType;
-      if (opts.onUpload) xhr.upload.onprogress = function(e){ if (e.lengthComputable) opts.onUpload(e.loaded / e.total); };
-      xhr.onload = function(){ resolve(xhr); };
-      xhr.onerror = function(){ reject(new Error('Нет связи с сервером')); };
-      xhr.ontimeout = function(){ reject(new Error('Слишком долго — сервер не ответил')); };
-      xhr.send(fd);
-    });
-  }
-
-  // 3 шага: билет (PHP) → склейка НАПРЯМУЮ у воркера → сохранение (PHP).
-  // Тяжёлый запрос идёт телефон↔воркер, минуя PHP-прокси и таймаут шлюза хостинга.
+  // Всё на одной машине (сайт + воркер на VPS) → простой путь: телефон шлёт кадры
+  // в PHP, PHP на своём сервере зовёт воркер по localhost, сохраняет и отвечает.
+  // Без CORS/билетов и без обрыва по таймауту шлюза (таймауты свои — Caddy/php-fpm).
   async function sendToCloud(room, onProgress){
-    // 1) билет
-    const tf = new FormData();
-    tf.append('csrf', CSRF); tf.append('tour_id', String(TOUR_ID));
-    const tr = await postForm('api/cloud_ticket.php', tf, { timeout: 30000 });
-    let tj = null; try { tj = JSON.parse(tr.responseText); } catch (e) {}
-    if (!tj || !tj.ok) throw new Error((tj && tj.error) || ('Не выдан билет (' + tr.status + ')'));
-
-    // 2) кадры → воркер напрямую
     const fd = new FormData();
-    fd.append('ticket', tj.ticket);
+    fd.append('csrf', CSRF);
+    fd.append('tour_id', String(TOUR_ID));
+    fd.append('title', ($('sceneName').value || '').slice(0, 60));
     const frames = [];
     for (let i = 0; i < room.shots.length; i++){
       const name = 'f' + pad3(i);
@@ -515,30 +495,21 @@ $token = csrf_token();
     }
     fd.append('manifest', JSON.stringify({ hfov: state.hfovDeg, width: state.panoW, frames: frames }));
 
-    const wr = await postForm(tj.worker, fd, {
-      timeout: 240000, responseType: 'blob',
-      onUpload: function(f){
-        if (onProgress) onProgress(f * 0.9);
-        if (f > 0.999) $('stitchTitle').textContent = 'Обрабатываю на сервере… (до минуты)';
-      }
+    return new Promise(function(resolve, reject){
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', 'api/stitch_cloud.php');
+      xhr.timeout = 300000;
+      xhr.upload.onprogress = function(e){ if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+      xhr.upload.onload = function(){ $('stitchTitle').textContent = 'Обрабатываю на сервере… (до минуты)'; setProgress(0.95); };
+      xhr.onload = function(){
+        let j = null; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+        if (j && j.ok){ setProgress(1); window.location.href = j.redirect || ('tour_edit.php?id=' + TOUR_ID); resolve(); }
+        else { reject(new Error((j && j.error) || ('Ошибка сервера ' + xhr.status))); }
+      };
+      xhr.onerror = function(){ reject(new Error('Нет связи с сервером')); };
+      xhr.ontimeout = function(){ reject(new Error('Сервер обрабатывает слишком долго')); };
+      xhr.send(fd);
     });
-    if (wr.status !== 200 || !(wr.response instanceof Blob) || wr.response.type.indexOf('image') !== 0){
-      let msg = 'Воркер вернул ошибку ' + wr.status;
-      try { msg = (JSON.parse(await wr.response.text()).error) || msg; } catch (e) {}
-      throw new Error(msg);
-    }
-    $('stitchTitle').textContent = 'Сохраняю в тур…'; setProgress(0.95);
-
-    // 3) сохранить результат в тур
-    const sf = new FormData();
-    sf.append('csrf', CSRF); sf.append('ticket', tj.ticket);
-    sf.append('title', ($('sceneName').value || '').slice(0, 60));
-    sf.append('image', wr.response, 'pano.jpg');
-    const sr = await postForm('api/save_scene.php', sf, { timeout: 60000 });
-    let sj = null; try { sj = JSON.parse(sr.responseText); } catch (e) {}
-    if (!sj || !sj.ok) throw new Error((sj && sj.error) || ('Не сохранилось (' + sr.status + ')'));
-    setProgress(1);
-    window.location.href = sj.redirect || ('tour_edit.php?id=' + TOUR_ID);
   }
 
   function offerFallback(room, msg){

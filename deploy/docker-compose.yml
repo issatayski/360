@@ -1,0 +1,72 @@
+# Полный стек платформы на VPS: Caddy (HTTPS) + PHP/Apache (сайт) + MariaDB + воркер.
+# Запуск: заполни .env (см. .env.example) и `docker compose up -d --build`.
+# Домен 360.sifro.kz должен указывать A-записью на IP этого VPS (для авто-TLS).
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - SITE_DOMAIN=${SITE_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - php
+
+  php:
+    build:
+      context: .
+      dockerfile: php.Dockerfile
+    restart: unless-stopped
+    environment:
+      - DB_DRIVER=mysql
+      - DB_HOST=db
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - WORKER_URL=http://worker:8080
+      - WORKER_TOKEN=${WORKER_TOKEN}
+    volumes:
+      - ../public_html:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+      worker:
+        condition: service_started
+
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      - MARIADB_DATABASE=${DB_NAME}
+      - MARIADB_USER=${DB_USER}
+      - MARIADB_PASSWORD=${DB_PASS}
+      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASS}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  worker:
+    build:
+      context: ../worker
+    restart: unless-stopped
+    environment:
+      - WORKER_TOKEN=${WORKER_TOKEN}
+      - MAX_WIDTH=${MAX_WIDTH:-4096}
+      - STITCH_BLEND=${STITCH_BLEND:-multiband}
+    expose:
+      - "8080"
+
+volumes:
+  caddy_data:
+  caddy_config:
+  db_data:

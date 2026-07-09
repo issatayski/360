@@ -11,14 +11,13 @@
  */
 
 // ---- База данных -----------------------------------------------------------
-// 'mysql' на хостинге, 'sqlite' для локального прогона без MySQL.
-const DB_DRIVER = 'mysql';
-
-// MySQL (заполнить на хостинге из cPanel → MySQL Databases)
-const DB_HOST = 'localhost';
-const DB_NAME = 'CHANGE_ME_dbname';
-const DB_USER = 'CHANGE_ME_dbuser';
-const DB_PASS = 'CHANGE_ME_dbpass';
+// Значения берутся из окружения (Docker/VPS), иначе — из дефолтов ниже.
+// 'mysql' на сервере, 'sqlite' для локального прогона без MySQL.
+define('DB_DRIVER', getenv('DB_DRIVER') ?: 'mysql');
+define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
+define('DB_NAME', getenv('DB_NAME') ?: 'CHANGE_ME_dbname');
+define('DB_USER', getenv('DB_USER') ?: 'CHANGE_ME_dbuser');
+define('DB_PASS', getenv('DB_PASS') ?: 'CHANGE_ME_dbpass');
 const DB_CHARSET = 'utf8mb4';
 
 // SQLite (используется только когда DB_DRIVER = 'sqlite')
@@ -32,9 +31,10 @@ const SEED_PASSWORD = 'changeme';
 // ---- Облачная склейка (воркер OpenCV, см. /worker) -------------------------
 // URL внешнего воркера склейки (Render/Fly/Cloud Run/VPS). Пусто = облако выкл,
 // тогда телефон склеивает черновик сам.
-const WORKER_URL = '';                       // напр. 'https://tour-stitch.onrender.com'
-const WORKER_TOKEN = '';                      // общий секрет, тот же в env воркера
-const WORKER_TIMEOUT = 180;                   // сек на ответ воркера (склейка тяжёлая)
+// На VPS воркер внутренний: WORKER_URL=http://worker:8080 (из окружения Docker).
+define('WORKER_URL', getenv('WORKER_URL') ?: '');
+define('WORKER_TOKEN', getenv('WORKER_TOKEN') ?: '');
+const WORKER_TIMEOUT = 300;                   // сек на ответ воркера (склейка тяжёлая)
 
 // ---- Приложение ------------------------------------------------------------
 // Абсолютная папка с загрузками (панорамы). Должна быть доступна на запись.
