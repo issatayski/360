@@ -15,6 +15,10 @@ Fly.io / Hugging Face Space). НЕ на shared-хостинге. PHP-сайт з
 import io
 import os
 import json
+import time
+import hmac
+import base64
+import hashlib
 import numpy as np
 import cv2
 from flask import Flask, request, Response, jsonify
@@ -29,15 +33,60 @@ MAX_WIDTH = int(os.environ.get("MAX_WIDTH", "2048"))
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
 
 
+# ---- CORS: телефон шлёт кадры напрямую сюда (другой домен, чем сайт) ----
+@app.after_request
+def add_cors(resp):
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Worker-Token"
+    return resp
+
+
+# ---- Билет: HMAC-подпись, выданная PHP (общий секрет WORKER_TOKEN) ----
+def _b64url_decode(s):
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def verify_ticket(ticket):
+    if not ticket or "." not in ticket:
+        return None
+    try:
+        payload, sig = ticket.split(".", 1)
+        calc = base64.urlsafe_b64encode(
+            hmac.new(WORKER_TOKEN.encode(), payload.encode(), hashlib.sha256).digest()
+        ).rstrip(b"=").decode()
+        if not hmac.compare_digest(calc, sig):
+            return None
+        data = json.loads(_b64url_decode(payload))
+        if float(data.get("exp", 0)) < time.time():
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def authorized():
+    if not WORKER_TOKEN:
+        return True  # секрет не задан — открыто (только для отладки)
+    if request.headers.get("X-Worker-Token", "") == WORKER_TOKEN:
+        return True
+    return verify_ticket(request.form.get("ticket", "")) is not None
+
+
 @app.get("/health")
 def health():
     return jsonify(ok=True, service="stitch-worker")
 
 
+@app.route("/stitch", methods=["OPTIONS"])
+def stitch_preflight():
+    return ("", 204)
+
+
 @app.post("/stitch")
 def stitch_endpoint():
-    if WORKER_TOKEN and request.headers.get("X-Worker-Token", "") != WORKER_TOKEN:
-        return jsonify(ok=False, error="bad token"), 401
+    if not authorized():
+        return jsonify(ok=False, error="bad token/ticket"), 401
 
     raw = request.form.get("manifest")
     if not raw:
