@@ -183,20 +183,55 @@ def reproject_weight(shape, R, hfov_deg, world):
     return ((wx * wy) * inside).astype(np.float32), inside
 
 
-def blend_multiband(imgs, Rs, hfov_deg, world, gains, num_bands=5):
-    """Профи-блендинг: каждый пиксель берётся из ОДНОГО кадра-победителя (нет
-    двоения), а стыки сглаживаются многополосно (нет швов). Тяжелее по памяти —
-    для VPS. Возвращает (uint8 HxWx3, coverage)."""
+def _winner_masks(imgs, Rs, hfov_deg, world):
+    """Маски-швы по «победителю» перьевого веса (быстро, но шов может резать объект)."""
     H, W = world.shape[:2]
-    # проход 1: кто «побеждает» на каждом пикселе (по перьевому весу)
     best_w = np.full((H, W), -1.0, np.float32)
     best_idx = np.full((H, W), -1, np.int32)
     for idx, R in enumerate(Rs):
         w, _inside = reproject_weight(imgs[idx].shape[:2], R, hfov_deg, world)
         take = w > best_w
         best_w[take] = w[take]; best_idx[take] = idx
+    return [((best_idx == idx).astype(np.uint8) * 255) for idx in range(len(imgs))]
 
-    # проход 2: скармливаем блендеру цвет + маску-шов (жёсткое разбиение по победителю)
+
+def _seam_masks(imgs, Rs, hfov_deg, gains, H, W, seam_width=1024):
+    """Умный поиск шва (graph-cut) на низком разрешении → маски, где стык проложен
+    по гладким местам в обход объектов. Возвращает список полноразмерных масок 0/255
+    или None при неудаче (тогда используем winner-маски)."""
+    try:
+        sW = min(seam_width, W)
+        world_s = equirect_world(sW)
+        imgs_s, masks_s = [], []
+        for idx, (img, R) in enumerate(zip(imgs, Rs)):
+            s, _w, inside = reproject_R(img, R, hfov_deg, world_s)
+            if gains is not None:
+                s = np.clip(s * gains[idx], 0, 255)
+            imgs_s.append(cv2.UMat(s.astype(np.float32)))
+            masks_s.append(cv2.UMat((inside.astype(np.uint8) * 255)))
+        corners = [(0, 0)] * len(imgs)
+        finder = cv2.detail_GraphCutSeamFinder("COST_COLOR")
+        finder.find(imgs_s, corners, masks_s)
+        out = []
+        for um in masks_s:
+            m = um.get()
+            out.append(cv2.resize(m, (W, H), interpolation=cv2.INTER_NEAREST))
+        print(f"[stitch] seam finder (graphcut) ok @ {sW}x{sW // 2}", flush=True)
+        return out
+    except Exception as e:
+        print("seam finder failed -> winner masks:", e, flush=True)
+        return None
+
+
+def blend_multiband(imgs, Rs, hfov_deg, world, gains, num_bands=5):
+    """Профи-блендинг: умный поиск шва (обходит объекты) + многополосное сглаживание
+    стыков. Каждый пиксель из ОДНОГО кадра (нет двоения). Возвращает (uint8, coverage)."""
+    H, W = world.shape[:2]
+
+    masks = _seam_masks(imgs, Rs, hfov_deg, gains, H, W)
+    if masks is None:
+        masks = _winner_masks(imgs, Rs, hfov_deg, world)
+
     nb = int(max(1, min(num_bands, np.floor(np.log2(min(H, W))))))
     blender = cv2.detail_MultiBandBlender(0, nb)
     blender.prepare((0, 0, W, H))
@@ -204,7 +239,7 @@ def blend_multiband(imgs, Rs, hfov_deg, world, gains, num_bands=5):
         sampled, w, inside = reproject_R(img, R, hfov_deg, world)
         if gains is not None:
             sampled = np.clip(sampled * gains[idx], 0, 255)
-        mask = ((best_idx == idx) & inside).astype(np.uint8) * 255
+        mask = ((masks[idx] > 127) & inside).astype(np.uint8) * 255
         blender.feed(np.ascontiguousarray(sampled.astype(np.int16)), mask, (0, 0))
     res, res_mask = blender.blend(None, None)
     out = np.clip(res, 0, 255).astype(np.uint8)
