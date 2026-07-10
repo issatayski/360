@@ -25,8 +25,8 @@ const DB_SQLITE_PATH = __DIR__ . '/../data/app.sqlite';
 
 // ---- Seed-агент (создаётся один раз через setup.php) -----------------------
 // ПОМЕНЯЙ пароль до запуска setup.php или сразу после первого входа.
-const SEED_EMAIL = 'agent@example.com';
-const SEED_PASSWORD = 'changeme';
+const SEED_EMAIL = 'agent1@sifro.kz';
+const SEED_PASSWORD = 'zxc123+-';
 
 // ---- Облачная склейка (воркер OpenCV, см. /worker) -------------------------
 // URL внешнего воркера склейки (Render/Fly/Cloud Run/VPS). Пусто = облако выкл,
