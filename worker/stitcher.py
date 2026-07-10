@@ -195,10 +195,11 @@ def _winner_masks(imgs, Rs, hfov_deg, world):
     return [((best_idx == idx).astype(np.uint8) * 255) for idx in range(len(imgs))]
 
 
-def _seam_masks(imgs, Rs, hfov_deg, gains, H, W, seam_width=1024):
-    """Умный поиск шва (graph-cut) на низком разрешении → маски, где стык проложен
+def _seam_masks(imgs, Rs, hfov_deg, gains, H, W, seam_width=768):
+    """Умный поиск шва (Dp — быстрый) на низком разрешении → маски, где стык проложен
     по гладким местам в обход объектов. Возвращает список полноразмерных масок 0/255
-    или None при неудаче (тогда используем winner-маски)."""
+    или None при неудаче (тогда используем winner-маски). GraphCut слишком медленный
+    на 22 кадрах, поэтому Dp."""
     try:
         sW = min(seam_width, W)
         world_s = equirect_world(sW)
@@ -210,13 +211,13 @@ def _seam_masks(imgs, Rs, hfov_deg, gains, H, W, seam_width=1024):
             imgs_s.append(cv2.UMat(s.astype(np.float32)))
             masks_s.append(cv2.UMat((inside.astype(np.uint8) * 255)))
         corners = [(0, 0)] * len(imgs)
-        finder = cv2.detail_GraphCutSeamFinder("COST_COLOR")
+        finder = cv2.detail_DpSeamFinder("COLOR")
         finder.find(imgs_s, corners, masks_s)
         out = []
         for um in masks_s:
             m = um.get()
             out.append(cv2.resize(m, (W, H), interpolation=cv2.INTER_NEAREST))
-        print(f"[stitch] seam finder (graphcut) ok @ {sW}x{sW // 2}", flush=True)
+        print(f"[stitch] seam finder (dp) ok @ {sW}x{sW // 2}", flush=True)
         return out
     except Exception as e:
         print("seam finder failed -> winner masks:", e, flush=True)
